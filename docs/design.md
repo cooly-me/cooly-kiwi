@@ -314,9 +314,22 @@ keys and is reported as an error on standard error at every check until it is fi
 At start, a key file needs at least one usable key. Sessions are capped (`--max-sessions`, 1,024; a new one beyond it gets `503`)
 and close after five idle minutes. It does not issue tokens.
 
-**Audit.** Every answer appends one JSON line (who, which agent, which corpus and
-snapshot, which atoms, how many matches were withheld) to an append-only log. Each
-record carries the hash of the previous one, and its own hash covers its content and
+**Audit.** Every tool call and resource read, answered, refused or failed, appends
+one JSON line to an append-only log: who, which agent and channel, which tool, corpus
+and snapshot; how the call ended (`status`: `ok`, `refused`, `failed` with the
+`reference` the caller was given); the atoms returned by their stable ids
+(`path#anchor`) and their documents, so a record keeps its meaning after the corpus is
+rebuilt (the pack uids beside them do not); how many items came back, how many matches
+were withheld, the tokens of the body the caller received (counted with the budget's
+tokenizer) and the budget applied; the server time. The ids and documents are only of
+atoms the caller can see; a proposal records the visible sections and documents it
+changes, never a new path. What the caller asked for (search queries, read ids, a map
+scope, a trace id, a feedback query, the sections and paths a proposal names, a
+resource URI) is recorded only when the corpus sets `audit.record_requests`: query text
+can be personal or confidential in itself, and is otherwise kept nowhere but in the
+knowledge-gap queue. Fields added after Kiwi 0.1.0 are left out when empty, so records
+of older logs hash and verify as they were written. Each record carries the hash of
+the previous one, and its own hash covers its content and
 that link, so editing, reordering or deleting a line breaks the chain where
 `kiwi audit verify` finds it. Truncation of the tail is caught against a saved anchor
 (`--anchor`). Each append holds an exclusive lock on the log file and links to the
@@ -453,7 +466,10 @@ bare id must name an atom the caller can see in exactly one corpus.
 
 A corpus the caller can see nothing of contributes nothing, is not listed in
 `snapshots` or the map, and answers exactly like a namespace that does not exist.
-Every corpus a call consults appends its own audit record. When the record of a corpus
+Every corpus a call consults appends its own audit record, with its own atoms by their
+corpus-local ids; the call's status, tokens, latency, result count and budget are the
+same on each, so a call is counted once per corpus. A call refused or failed before any
+corpus answered is recorded in every corpus. When the record of a corpus
 the caller can see nothing of cannot be written, the call is answered all the same and
 the failure goes to the operator's log: a hidden corpus's state never shows in an
 answer. Internal failures in general (I/O, a corrupt pack, a tool's output) reach an
@@ -634,7 +650,7 @@ that do not move.
 | L1 abstracts | frontmatter `summary`, else the first sentence; enrichers are off |
 | Reranking | off; when on, within 2 s: the top 10 locally (`jina-reranker-v2-base-multilingual`), the top 20 over HTTP |
 | Embeddings (when `vec` is on) | local `fastembed`, `multilingual-e5-small`, 384 dimensions, 1 bit per dimension, int8 re-scoring |
-| Audit | the local hash-chained log; no sink |
+| Audit | the local hash-chained log; no sink; requests not recorded (`audit.record_requests`) |
 | Agents not in `principals.yaml` | no labels (`default_agent`) |
 | Packs kept | 10, the current one included (`packs.keep`) |
 | HTTP sessions | at most 1,024, closed after five idle minutes |

@@ -63,6 +63,7 @@ and paragraph checks are the same for LF and CRLF files.
 | `plugins.rerank.top_k` | 10 local, 20 `http` | Results reranked from the top. |
 | `plugins.rerank.timeout_ms` | `2000` | Limit for one rerank; past it the fused order stands. |
 | `plugins.wasm.components` | none | `[{ name = "…", path = "…" }]`: WebAssembly plugins, governed as `plugin:<name>`. |
+| `audit.record_requests` | `false` | Write what callers asked for into each record's `queries` (search queries, read ids, a map scope, a trace id, a feedback query, the sections and paths a proposal names, a resource URI; each cut to 2,000 characters, at most 50), for the local log and every sink. Query text can be personal or confidential in itself; leave it off unless the log and its sinks may hold it. Contents, rationales, filters and notes are never recorded. |
 | `audit.sinks` | none | `[[audit.sinks]]` tables, below. |
 
 `[[audit.sinks]]`: copies of every audit record (a record's `note` is replaced by
@@ -159,7 +160,7 @@ refuse when there is none.
 | `kiwi gaps <corpus>` | `--principal <writer>`, `--state <dir>`, `--limit <n>` (100); shows the queries of askers whose view when they asked the writer may read entirely now |
 | `kiwi export <corpus>` | `--format llms-txt` or `jsonl`, `--principal`, `--agent` (default `cli`) |
 | `kiwi gc <corpus>` | `--keep <n>` (default `packs.keep`) |
-| `kiwi audit verify <file>` | `--anchor <hash>` (the expected last hash, to catch truncation) |
+| `kiwi audit verify <file>` | `--anchor <hash>` (the expected last hash, to catch truncation); logs of every Kiwi version |
 | `kiwi bench [corpus]` | `--questions`, `--principals`, `--embedder`, `--repeat`, `--synthetic <atoms>`, `--keep-synthetic <dir>`, `--rerank <model>`, `--rerank-top-k <n>`, `--json` |
 | `kiwi info` | the version and compiled-in plugins |
 
@@ -187,6 +188,40 @@ enforce them: protect the base branch so that a pull request labelled
 `kiwi:owner-review` cannot merge (a required status check that fails while the label is
 present, or a ruleset on it) until an owner approves, with CODEOWNERS review required
 for the paths those owners hold.
+
+## Audit records
+
+One JSON object per line of `.kiwi/state/audit.log`, one per call and corpus. A field
+marked *new* was added after Kiwi 0.1.0 and is left out when empty or unset, so older
+records hash as they were written; a record written by Kiwi 0.1.0 has none of them.
+
+| Field | Type | Present |
+| --- | --- | --- |
+| `seq` | integer | always; 1, 2, 3... along the chain |
+| `ts` | string, RFC 3339 UTC to the second | always |
+| `principal`, `agent`, `channel` | string | always (`kiwi`, `kiwi`, `local` on a quarantine record) |
+| `tool` | string | always: `kiwi_map`, `kiwi_search`, `kiwi_read`, `kiwi_trace`, `kiwi_feedback`, `kiwi_propose`, `resource`, or `audit-quarantine` |
+| `snapshot` | string | always (empty on a quarantine record); a pinned snapshot for `resource` |
+| `namespace` | string | when not empty |
+| `atoms` | array of integers | always; pack uids of `ids`, meaningful in that pack only |
+| `blocked` | integer | always; matches withheld by the policy |
+| `status` | `ok`, `refused` or `failed` | *new*; on every call record |
+| `ids` | array of strings | *new*; when not empty: stable ids of the visible atoms returned (search results, map nodes, read atoms, trace nodes, a resource), named by a feedback, or changed by a proposal (edited sections, roots of documents written, set or deleted), distinct, in answer order; unqualified on a federated server |
+| `docs` | array of strings | *new*; when not empty: the distinct document paths (without `.md`) of `ids` |
+| `results` | integer | *new*; on an `ok` map, search, read, trace or resource: items returned by the whole call |
+| `tokens` | integer | *new*; on every call record: tokens of the body the caller received, answer or message, with the budget's tokenizer |
+| `budget` | integer | *new*; on an `ok` map or search: the token budget applied |
+| `latency_ms` | integer | *new*; on every call record: server time until the record |
+| `queries` | array of strings | *new*; only with `audit.record_requests` and when the call named any |
+| `reference` | string | *new*; on a `failed` record: the reference the caller was given |
+| `note` | string | local log only, when there is one: why a proposal was refused or failed, conflicts with hidden content, the cause of a failure; a sink gets `note_mac` (64 hex) instead |
+| `quarantined` | object `{file, bytes, blake3}` | on a quarantine record; a sink gets `{file, mac}` |
+| `prev`, `hash` | string, 64 hex | always |
+
+On a federated server each corpus consulted writes its own record with its own `ids`,
+`docs`, `atoms` and `blocked`; `status`, `results`, `tokens`, `budget`, `latency_ms`,
+`queries` and `reference` describe the whole call and repeat on each. A call refused or
+failed before any corpus answered is recorded in every corpus.
 
 ## Over HTTP
 

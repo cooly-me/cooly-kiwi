@@ -8,6 +8,9 @@
 //!    the full corpus — same atoms, same order, same scores, same snippets, same lint
 //!    findings, same refusals. Hidden content cannot shift a single byte of what the
 //!    principal receives.
+//! 3. The audit records of those calls name the same atoms and documents on both
+//!    corpora, with the same status, result count and budget: a record never names an
+//!    atom or a document hidden from its caller.
 //!
 //! The corpus is the example corpus plus adversarial documents: access on a root
 //! heading, frontmatter behind a byte order mark, fences with trailing whitespace, CRLF,
@@ -36,7 +39,7 @@ use kiwi_core::{Engine, EngineConfig, Pack, PackStore};
 use kiwi_mcp::{CorpusPlugins, KiwiService, ServiceOptions};
 use kiwi_policy::{Directory, Identity, PolicyGate};
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 #[derive(Deserialize)]
 struct Case {
@@ -352,7 +355,20 @@ fn service(root: &Path) -> KiwiService {
         stdout_is_protocol: false,
         snapshot: None,
     };
-    KiwiService::open(options, gate(root), CorpusPlugins::default()).unwrap()
+    let (_, factories) = plugins();
+    let plugins = CorpusPlugins {
+        factories,
+        reranker: None,
+    };
+    KiwiService::open(options, gate(root), plugins).unwrap()
+}
+
+/// The records of a corpus's audit log.
+fn audit_records(root: &Path) -> Vec<Value> {
+    match std::fs::read_to_string(root.join(".kiwi/state/audit.log")) {
+        Ok(text) => text.lines().map(|l| serde_json::from_str(l).unwrap()).collect(),
+        Err(_) => Vec::new(),
+    }
 }
 
 /// A proposal's answer without what names the commit (snapshot, id, branch, link).
@@ -618,7 +634,9 @@ fn hidden_content_cannot_change_any_answer() {
             assert_eq!(without_snapshot(a), without_snapshot(b), "{} read", case.id);
             compared += 1;
         }
+        let full_before = audit_records(&full.root).len();
         let stripped_service = service(&stripped.root);
+        let stripped_before = audit_records(&stripped.root).len();
         for request in proposals() {
             let a = proposal_answer(&full_service, &identity, &request);
             let b = proposal_answer(&stripped_service, &identity, &request);
@@ -644,6 +662,87 @@ fn hidden_content_cannot_change_any_answer() {
                 (a, b) => panic!("{} trace {id}: {a:?} vs {b:?}", case.id),
             }
             compared += 1;
+        }
+
+        // Every tool through the service: the same answers, and audit records that name
+        // the same atoms and documents, none hidden from the caller.
+        let mut calls: Vec<(&str, Value)> = queries
+            .iter()
+            .map(|qs| ("kiwi_search", json!({ "queries": qs })))
+            .collect();
+        calls.push(("kiwi_map", json!({"depth": 3, "budget": 20_000})));
+        calls.push((
+            "kiwi_map",
+            json!({"scope": "product", "depth": 4, "budget": 20_000}),
+        ));
+        calls.push(("kiwi_read", json!({ "ids": reads })));
+        calls.push(("kiwi_read", json!({"ids": reads, "context": "children"})));
+        calls.extend(traces.iter().map(|id| ("kiwi_trace", json!({ "id": id }))));
+        calls.push((
+            "kiwi_feedback",
+            json!({"query": "q", "ids": reads, "verdict": "useful"}),
+        ));
+        for (tool, args) in &calls {
+            let a = full_service
+                .call(&identity, tool, args.clone())
+                .map(without_snapshot)
+                .map_err(|e| e.to_string());
+            let b = stripped_service
+                .call(&identity, tool, args.clone())
+                .map(without_snapshot)
+                .map_err(|e| e.to_string());
+            assert_eq!(a, b, "{} {tool} {args}", case.id);
+            compared += 1;
+        }
+        for id in &reads {
+            let resource = |service: &KiwiService, root: &Path| {
+                let snapshot = PackStore::new(root.join(PACK_DIR))
+                    .current()
+                    .unwrap()
+                    .map(|path| Pack::open(path).unwrap().snapshot().to_owned())
+                    .unwrap();
+                service
+                    .read_resource(&identity, &format!("kiwi://atom/{id}@{snapshot}"))
+                    .map_err(|e| e.to_string().replace(&snapshot, "SNAPSHOT"))
+            };
+            assert_eq!(
+                resource(&full_service, &full.root),
+                resource(&stripped_service, &stripped.root),
+                "{} resource {id}",
+                case.id
+            );
+        }
+        let full_records = audit_records(&full.root).split_off(full_before);
+        let stripped_records = audit_records(&stripped.root).split_off(stripped_before);
+        assert_eq!(full_records.len(), stripped_records.len(), "{}", case.id);
+        assert!(full_records.len() >= calls.len() + reads.len());
+        for (a, b) in full_records.iter().zip(&stripped_records) {
+            for key in ["principal", "tool", "status", "ids", "docs", "results", "budget"] {
+                assert_eq!(a[key], b[key], "{} {key}: {a} vs {b}", case.id);
+            }
+            let ids: Vec<&str> = a["ids"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|id| id.as_str().unwrap())
+                .collect();
+            for id in &ids {
+                let uid = full_engine.pack().resolve_id(id).unwrap();
+                assert!(
+                    uid.is_some_and(|uid| full_view.contains(uid)),
+                    "{}: a record names {id}, hidden from them",
+                    case.id
+                );
+            }
+            for doc in a["docs"].as_array().into_iter().flatten() {
+                let doc = doc.as_str().unwrap();
+                assert!(
+                    ids.iter().any(|id| id.split('#').next() == Some(doc)),
+                    "{}: a record names the document {doc} of none of its ids",
+                    case.id
+                );
+            }
+            assert!(a.get("queries").is_none(), "requests are not recorded by default");
         }
     }
     assert!(compared > 400, "compared {compared} answers");

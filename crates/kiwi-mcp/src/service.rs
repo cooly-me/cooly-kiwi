@@ -13,7 +13,8 @@
 //!   cuts to one budget;
 //! - a corpus the caller can see nothing of contributes nothing, is not listed, and
 //!   answers exactly like a namespace that does not exist;
-//! - every corpus consulted appends its own audit record, with its own atoms.
+//! - every corpus consulted appends its own audit record, with its own atoms; a call
+//!   refused or failed before any corpus was consulted is recorded in every corpus.
 //!
 //! The search settings (budget, limit, reranker) of the first corpus the caller can see
 //! apply to federated answers, so a corpus the caller cannot see never shapes one; a
@@ -21,17 +22,20 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use kiwi_core::api::{
     AuditFacts, BudgetUse, ContextItem, HiddenItem, Link, MapNode, MapRequest, MapResponse, ReadRequest,
     ReadResponse, SearchRequest, SearchResponse, TraceRequest, TraceResponse, Warning,
 };
 use kiwi_core::{Engine, EngineConfig, RankedAtom, View, fit_budget, text};
-use kiwi_policy::Identity;
+use kiwi_policy::{AuditStatus, Identity};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub use crate::corpus::{Corpus, CorpusPlugins, Served, ServiceOptions, engine_config, open_engine};
+pub use crate::corpus::{
+    CallSummary, Corpus, CorpusPlugins, Proposed, Served, ServiceOptions, engine_config, open_engine,
+};
 use crate::feedback::{FeedbackRecord, Verdict};
 
 /// Errors a tool call can end with.
@@ -44,6 +48,10 @@ pub enum ToolError {
     /// log only: MCP clients receive a generic message with a reference to it.
     #[error("internal error: {0}")]
     Internal(String),
+    /// The server failed, and the details went to the operator's log and the audit log
+    /// under this reference, the only thing the caller receives.
+    #[error("internal error (reference {0})")]
+    Failed(String),
 }
 
 impl From<kiwi_core::KiwiError> for ToolError {
@@ -141,8 +149,149 @@ struct ProposeResponse<'a> {
 }
 
 type CacheKey = (Vec<(String, Vec<u32>)>, &'static str, String);
-type CachedAnswer = (String, Vec<AuditFacts>);
-type Answer = (String, Vec<AuditFacts>);
+/// An answer and the tokens of its text.
+type CachedAnswer = (Answer, u32);
+
+/// A read tool's answer: its JSON, each corpus's audit facts (by corpus index), the
+/// token budget applied and how many items it returned.
+#[derive(Debug, Clone)]
+struct Answer {
+    text: String,
+    facts: Vec<AuditFacts>,
+    budget: Option<u32>,
+    results: u32,
+}
+
+impl Answer {
+    fn new<R: Serialize>(
+        response: &R,
+        facts: Vec<AuditFacts>,
+        budget: Option<u32>,
+        results: usize,
+    ) -> Result<Self, ToolError> {
+        Ok(Self {
+            text: KiwiService::to_json(response)?,
+            facts,
+            budget,
+            results: u32::try_from(results).unwrap_or(u32::MAX),
+        })
+    }
+}
+
+/// One corpus's share of a call, for its audit record.
+struct Part {
+    /// The corpus.
+    index: usize,
+    /// The engine whose pack `facts` names atoms of: the one served, or a pinned
+    /// snapshot's.
+    engine: Arc<Engine>,
+    facts: AuditFacts,
+    note: Option<String>,
+}
+
+/// How a call ended, before it is audited.
+struct Outcome {
+    answer: Result<String, ToolError>,
+    /// Each consulted corpus's share. When empty, every corpus records the call with
+    /// nothing returned.
+    parts: Vec<Part>,
+    budget: Option<u32>,
+    results: Option<u32>,
+    /// The tokens of the answer, when already counted (a cached answer).
+    tokens: Option<u32>,
+    /// The reference of a failure the tool reports in a message of its own (a proposal
+    /// that could not be prepared).
+    failure: Option<String>,
+}
+
+impl Outcome {
+    /// A call that ended with `error` before any corpus answered.
+    fn stopped(error: ToolError) -> Self {
+        Self {
+            answer: Err(error),
+            parts: Vec::new(),
+            budget: None,
+            results: None,
+            tokens: None,
+            failure: None,
+        }
+    }
+
+    /// The outcome of a read tool.
+    fn read(answered: Result<(Answer, u32, Vec<Part>), ToolError>) -> Self {
+        match answered {
+            Ok((answer, tokens, parts)) => Self {
+                answer: Ok(answer.text),
+                parts,
+                budget: answer.budget,
+                results: Some(answer.results),
+                tokens: Some(tokens),
+                failure: None,
+            },
+            Err(error) => Self::stopped(error),
+        }
+    }
+}
+
+/// The tools, by name.
+const TOOLS: [&str; 6] = [
+    "kiwi_map",
+    "kiwi_search",
+    "kiwi_read",
+    "kiwi_trace",
+    "kiwi_feedback",
+    "kiwi_propose",
+];
+
+/// The most requests a record keeps, and the longest each may be.
+const MAX_REQUESTS: usize = 50;
+const MAX_REQUEST_CHARS: usize = 2_000;
+
+/// What the caller asked for, as an audit record keeps it when the corpus records
+/// requests: search queries, read ids, a map scope, a trace id, a feedback query, the
+/// sections and paths a proposal names. Taken from the arguments as sent, so a refused
+/// call has them too; anything else in the arguments (filters, contents, rationales) is
+/// never kept.
+fn requests_of(tool: &str, args: &serde_json::Value) -> Vec<String> {
+    let strings = |value: &serde_json::Value| -> Vec<String> {
+        match value {
+            serde_json::Value::String(text) => vec![text.clone()],
+            serde_json::Value::Array(items) => items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect(),
+            _ => Vec::new(),
+        }
+    };
+    let asked: Vec<String> = match tool {
+        "kiwi_search" => strings(&args["queries"]),
+        "kiwi_read" => strings(&args["ids"]),
+        "kiwi_map" => strings(&args["scope"]),
+        "kiwi_trace" => strings(&args["id"]),
+        "kiwi_feedback" => strings(&args["query"]),
+        "kiwi_propose" => args["changes"]
+            .as_array()
+            .map(|changes| {
+                changes
+                    .iter()
+                    .flat_map(|change| {
+                        let mut named = strings(&change["section"]);
+                        named.extend(strings(&change["path"]));
+                        named
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    asked
+        .into_iter()
+        .filter(|text| !text.is_empty())
+        .take(MAX_REQUESTS)
+        .map(|text| text::truncate_chars(&text, MAX_REQUEST_CHARS))
+        .collect()
+}
 
 /// The response cache holds at most this many answers and this many bytes of them; when
 /// either is reached it starts over (answers of replaced packs go with it).
@@ -388,41 +537,96 @@ impl KiwiService {
         (format!("fed-{}", &hasher.finalize().to_hex()[..16]), map)
     }
 
-    fn audit_all(
+    /// Audits a finished call in every corpus it consulted (or, when it consulted none,
+    /// in every corpus) and returns what the caller receives. An internal error gets its
+    /// reference here: the operator's log, the record and the caller share it.
+    fn finish(
         &self,
         identity: &Identity,
         tool: &str,
-        scoped: &[Scoped],
-        facts: &[AuditFacts],
-    ) -> Result<(), ToolError> {
-        for (index, (scope, facts)) in scoped.iter().zip(facts).enumerate() {
-            self.audit_one(
-                index,
-                scope,
-                identity,
-                tool,
-                scope.engine.pack().snapshot(),
-                facts,
-            )?;
+        started: Instant,
+        requests: Vec<String>,
+        outcome: Outcome,
+    ) -> Result<String, ToolError> {
+        let Outcome {
+            answer,
+            mut parts,
+            budget,
+            results,
+            tokens,
+            failure,
+        } = outcome;
+        let mut failure_note = None;
+        let (answer, status, reference) = match answer {
+            Ok(text) => (Ok(text), AuditStatus::Ok, None),
+            Err(ToolError::Internal(cause)) => {
+                let reference = crate::server::log_internal(&format!("{tool}: {cause}"));
+                failure_note = Some(format!("failed (reference {reference}): {cause}"));
+                (
+                    Err(ToolError::Failed(reference.clone())),
+                    AuditStatus::Failed,
+                    Some(reference),
+                )
+            }
+            Err(ToolError::Failed(reference)) => (
+                Err(ToolError::Failed(reference.clone())),
+                AuditStatus::Failed,
+                Some(reference),
+            ),
+            Err(refusal @ ToolError::Invalid(_)) => match failure {
+                Some(reference) => (Err(refusal), AuditStatus::Failed, Some(reference)),
+                None => (Err(refusal), AuditStatus::Refused, None),
+            },
+        };
+        let answered = status == AuditStatus::Ok;
+        let tokens = match (&answer, tokens) {
+            (Ok(_), Some(tokens)) => tokens,
+            (Ok(text), None) => kiwi_compiler::compile::count_tokens(text),
+            (Err(error), _) => kiwi_compiler::compile::count_tokens(&error.to_string()),
+        };
+        if parts.is_empty() {
+            parts = self
+                .corpora
+                .iter()
+                .enumerate()
+                .map(|(index, corpus)| Part {
+                    index,
+                    engine: corpus.engine(),
+                    facts: AuditFacts::default(),
+                    note: None,
+                })
+                .collect();
         }
-        Ok(())
+        let summary = CallSummary {
+            status,
+            results: results.filter(|_| answered),
+            tokens,
+            budget: budget.filter(|_| answered),
+            latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            requests,
+            reference,
+        };
+        for part in parts {
+            let note = part.note.clone().or_else(|| failure_note.clone());
+            self.audit(identity, tool, &summary, &part, note)?;
+        }
+        answer
     }
 
     /// Appends one corpus's audit record. On a federated server, a corpus the caller
     /// cannot see never fails the call: its failure is logged for the operator, and the
     /// answer is the same as if the corpus did not exist.
-    fn audit_one(
+    fn audit(
         &self,
-        index: usize,
-        scope: &Scoped,
         identity: &Identity,
         tool: &str,
-        snapshot: &str,
-        facts: &AuditFacts,
+        summary: &CallSummary,
+        part: &Part,
+        note: Option<String>,
     ) -> Result<(), ToolError> {
-        let corpus = &self.corpora[index];
-        match corpus.audit(identity, tool, snapshot, facts) {
-            Err(ToolError::Internal(error)) if self.federated() && !scope.visible() => {
+        let corpus = &self.corpora[part.index];
+        match corpus.record(identity, tool, part.engine.pack(), &part.facts, summary, note) {
+            Err(ToolError::Internal(error)) if self.federated() && !self.sees(part.index, identity) => {
                 crate::server::log_internal(&format!(
                     "audit of `{}` (not visible to the caller) failed: {error}",
                     corpus.namespace()
@@ -433,18 +637,27 @@ impl KiwiService {
         }
     }
 
+    /// Whether the caller can see anything of corpus `index` (when unknown, yes).
+    fn sees(&self, index: usize, identity: &Identity) -> bool {
+        self.corpora[index]
+            .served()
+            .view(identity)
+            .map_or(true, |(view, _)| !view.visible().is_empty())
+    }
+
     fn parse<T: for<'de> Deserialize<'de>>(args: serde_json::Value) -> Result<T, ToolError> {
         serde_json::from_value(args).map_err(|e| ToolError::Invalid(format!("invalid arguments: {e}")))
     }
 
-    /// Answers a read tool from the cache or by running it, and audits every corpus.
+    /// Answers a read tool from the cache or by running it. Returns the answer, the
+    /// tokens of its text and each corpus's share for the audit.
     fn cached(
         &self,
         identity: &Identity,
         tool: &'static str,
         args: &serde_json::Value,
         run: impl FnOnce(&[Scoped]) -> Result<Answer, ToolError>,
-    ) -> Result<Answer, ToolError> {
+    ) -> Result<(Answer, u32, Vec<Part>), ToolError> {
         let scoped = self.scope(identity)?;
         let key: CacheKey = (
             scoped
@@ -454,54 +667,100 @@ impl KiwiService {
             tool,
             args.to_string(),
         );
+        let parts = |answer: &Answer| -> Vec<Part> {
+            scoped
+                .iter()
+                .zip(&answer.facts)
+                .enumerate()
+                .map(|(index, (scope, facts))| Part {
+                    index,
+                    engine: Arc::clone(&scope.engine),
+                    facts: facts.clone(),
+                    note: None,
+                })
+                .collect()
+        };
         if let Ok(cache) = self.cache.lock()
-            && let Some((text, facts)) = cache.answers.get(&key)
+            && let Some((answer, tokens)) = cache.answers.get(&key)
         {
-            let (text, facts) = (text.clone(), facts.clone());
+            let (answer, tokens) = (answer.clone(), *tokens);
             drop(cache);
-            self.audit_all(identity, tool, &scoped, &facts)?;
-            return Ok((text, facts));
+            let parts = parts(&answer);
+            return Ok((answer, tokens, parts));
         }
-        let (text, facts) = run(&scoped)?;
-        self.audit_all(identity, tool, &scoped, &facts)?;
+        let answer = run(&scoped)?;
+        let tokens = kiwi_compiler::compile::count_tokens(&answer.text);
         // An answer missing a failed tier is not kept: the next call tries again.
-        if !facts.iter().any(|f| f.degraded)
+        if !answer.facts.iter().any(|f| f.degraded)
             && let Ok(mut cache) = self.cache.lock()
         {
-            let size = key.2.len() + text.len();
+            let size = key.2.len() + answer.text.len();
             if cache.answers.len() >= CACHE_CAPACITY || cache.bytes + size > CACHE_BYTES {
                 cache.answers.clear();
                 cache.bytes = 0;
             }
             cache.bytes += size;
-            cache.answers.insert(key, (text.clone(), facts.clone()));
+            cache.answers.insert(key, (answer.clone(), tokens));
         }
-        Ok((text, facts))
+        let parts = parts(&answer);
+        Ok((answer, tokens, parts))
     }
 
-    /// Runs a tool for `identity` and returns its JSON answer.
+    /// Runs a tool for `identity` and returns its JSON answer. Every call of a tool is
+    /// audited, answered, refused or failed.
     pub fn call(
         &self,
         identity: &Identity,
         tool: &str,
         args: serde_json::Value,
     ) -> Result<String, ToolError> {
+        let started = Instant::now();
+        let Some(tool) = TOOLS.iter().copied().find(|name| *name == tool) else {
+            return Err(ToolError::Invalid(format!("unknown tool `{tool}`")));
+        };
         let args = if args.is_null() {
             serde_json::json!({})
         } else {
             args
         };
-        match tool {
-            "kiwi_map" => {
-                let req: MapRequest = Self::parse(args.clone())?;
-                Ok(self.cached(identity, "kiwi_map", &args, |s| self.map(s, &req))?.0)
-            }
-            "kiwi_search" => {
-                let req: SearchRequest = Self::parse(args.clone())?;
-                let (text, facts) = self.cached(identity, "kiwi_search", &args, |s| self.search(s, &req))?;
+        let requests = requests_of(tool, &args);
+        let outcome = match tool {
+            "kiwi_map" => match Self::parse::<MapRequest>(args.clone()) {
+                Ok(req) => Outcome::read(self.cached(identity, tool, &args, |s| self.map(s, &req))),
+                Err(error) => Outcome::stopped(error),
+            },
+            "kiwi_search" => match Self::parse::<SearchRequest>(args.clone()) {
+                Ok(req) => self.search_tool(identity, &args, &req),
+                Err(error) => Outcome::stopped(error),
+            },
+            "kiwi_read" => match Self::parse::<ReadRequest>(args.clone()) {
+                Ok(req) => Outcome::read(self.cached(identity, tool, &args, |s| self.read(s, &req))),
+                Err(error) => Outcome::stopped(error),
+            },
+            "kiwi_trace" => match Self::parse::<TraceRequest>(args.clone()) {
+                Ok(req) => Outcome::read(self.cached(identity, tool, &args, |s| self.trace(s, &req))),
+                Err(error) => Outcome::stopped(error),
+            },
+            "kiwi_feedback" => match Self::parse(args) {
+                Ok(req) => self.feedback_tool(identity, req),
+                Err(error) => Outcome::stopped(error),
+            },
+            _ => match Self::parse(args) {
+                Ok(req) => self.propose_tool(identity, req),
+                Err(error) => Outcome::stopped(error),
+            },
+        };
+        self.finish(identity, tool, started, requests, outcome)
+    }
+
+    /// `kiwi_search`, and a gap recorded when nothing matched.
+    fn search_tool(&self, identity: &Identity, args: &serde_json::Value, req: &SearchRequest) -> Outcome {
+        let answered = self.cached(identity, "kiwi_search", args, |s| self.search(s, req));
+        let gap = match &answered {
+            Ok((answer, _, _)) => {
                 // A gap: no exact, term or lexical match (vector neighbours always
                 // exist, so they alone do not count as an answer).
-                let answered = serde_json::from_str::<SearchResponse>(&text)
+                let matched = serde_json::from_str::<SearchResponse>(&answer.text)
                     .map(|r| {
                         r.results.iter().any(|item| {
                             item.why.iter().any(|w| {
@@ -509,28 +768,16 @@ impl KiwiService {
                             })
                         })
                     })
-                    .unwrap_or_else(|_| facts.iter().any(|f| !f.atoms.is_empty()));
-                if !answered && !req.queries.is_empty() {
-                    self.record_gap(identity, &req)?;
-                }
-                Ok(text)
+                    .unwrap_or_else(|_| answer.facts.iter().any(|f| !f.atoms.is_empty()));
+                !matched && !req.queries.is_empty()
             }
-            "kiwi_read" => {
-                let req: ReadRequest = Self::parse(args.clone())?;
-                Ok(self
-                    .cached(identity, "kiwi_read", &args, |s| self.read(s, &req))?
-                    .0)
-            }
-            "kiwi_trace" => {
-                let req: TraceRequest = Self::parse(args.clone())?;
-                Ok(self
-                    .cached(identity, "kiwi_trace", &args, |s| self.trace(s, &req))?
-                    .0)
-            }
-            "kiwi_feedback" => self.feedback_tool(identity, Self::parse(args)?),
-            "kiwi_propose" => self.propose_tool(identity, Self::parse(args)?),
-            other => Err(ToolError::Invalid(format!("unknown tool `{other}`"))),
+            Err(_) => false,
+        };
+        let mut outcome = Outcome::read(answered);
+        if gap && let Err(error) = self.record_gap(identity, req) {
+            outcome.answer = Err(error);
         }
+        outcome
     }
 
     fn to_json<R: Serialize>(response: &R) -> Result<String, ToolError> {
@@ -540,7 +787,12 @@ impl KiwiService {
     fn search(&self, scoped: &[Scoped], req: &SearchRequest) -> Result<Answer, ToolError> {
         if !self.federated() {
             let (response, facts) = scoped[0].engine.search(&scoped[0].view, req)?;
-            return Ok((Self::to_json(&response)?, vec![facts]));
+            return Answer::new(
+                &response,
+                vec![facts],
+                Some(response.budget.limit),
+                response.results.len(),
+            );
         }
         let lead = lead(scoped);
         let settings = lead.map_or_else(EngineConfig::default, |index| *scoped[index].engine.config());
@@ -647,7 +899,7 @@ impl KiwiService {
             warnings: warnings.into_iter().collect(),
             redacted,
         };
-        Ok((Self::to_json(&response)?, facts))
+        Answer::new(&response, facts, Some(budget), response.results.len())
     }
 
     fn qualify_warning(&self, index: usize, warning: Warning) -> Warning {
@@ -684,7 +936,8 @@ impl KiwiService {
     fn map(&self, scoped: &[Scoped], req: &MapRequest) -> Result<Answer, ToolError> {
         if !self.federated() {
             let (response, facts) = scoped[0].engine.map(&scoped[0].view, req)?;
-            return Ok((Self::to_json(&response)?, vec![facts]));
+            let listed = facts.atoms.len();
+            return Answer::new(&response, vec![facts], Some(response.budget.limit), listed);
         }
         let budget = lead(scoped)
             .map_or_else(EngineConfig::default, |index| *scoped[index].engine.config())
@@ -766,13 +1019,14 @@ impl KiwiService {
             warnings: warnings.into_iter().collect(),
             redacted,
         };
-        Ok((Self::to_json(&response)?, facts))
+        let listed = facts.iter().map(|f| f.atoms.len()).sum();
+        Answer::new(&response, facts, Some(budget), listed)
     }
 
     fn read(&self, scoped: &[Scoped], req: &ReadRequest) -> Result<Answer, ToolError> {
         if !self.federated() {
             let (response, facts) = scoped[0].engine.read(&scoped[0].view, req)?;
-            return Ok((Self::to_json(&response)?, vec![facts]));
+            return Answer::new(&response, vec![facts], None, response.atoms.len());
         }
         if req.ids.is_empty() {
             return Err(ToolError::Invalid("ids must not be empty".into()));
@@ -853,13 +1107,13 @@ impl KiwiService {
             warnings: warnings.into_iter().collect(),
             redacted,
         };
-        Ok((Self::to_json(&response)?, facts))
+        Answer::new(&response, facts, None, response.atoms.len())
     }
 
     fn trace(&self, scoped: &[Scoped], req: &TraceRequest) -> Result<Answer, ToolError> {
         if !self.federated() {
             let (response, facts) = scoped[0].engine.trace(&scoped[0].view, req)?;
-            return Ok((Self::to_json(&response)?, vec![facts]));
+            return Answer::new(&response, vec![facts], None, response.nodes.len());
         }
         let missing = || ToolError::Invalid(format!("no atom `{}`", req.id));
         let Located::Found(index, local) = self.locate(scoped, &req.id)? else {
@@ -904,7 +1158,7 @@ impl KiwiService {
                 .map(|w| self.qualify_warning(index, w))
                 .collect(),
         };
-        Ok((Self::to_json(&response)?, facts))
+        Answer::new(&response, facts, None, response.nodes.len())
     }
 
     fn record_gap(&self, identity: &Identity, req: &SearchRequest) -> Result<(), ToolError> {
@@ -934,7 +1188,23 @@ impl KiwiService {
         Ok(())
     }
 
-    fn feedback_tool(&self, identity: &Identity, req: FeedbackRequest) -> Result<String, ToolError> {
+    fn feedback_tool(&self, identity: &Identity, req: FeedbackRequest) -> Outcome {
+        match self.feedback(identity, &req) {
+            Ok((text, parts)) => Outcome {
+                answer: Ok(text),
+                parts,
+                budget: None,
+                results: None,
+                tokens: None,
+                failure: None,
+            },
+            Err(error) => Outcome::stopped(error),
+        }
+    }
+
+    /// Records a feedback in each corpus it concerns. Returns the answer and, for the
+    /// audit, each of those corpora with the atoms named there that the caller sees.
+    fn feedback(&self, identity: &Identity, req: &FeedbackRequest) -> Result<(String, Vec<Part>), ToolError> {
         if req.verdict == Verdict::NoResults {
             return Err(ToolError::Invalid(
                 "verdict must be useful, wrong or missing".into(),
@@ -979,60 +1249,67 @@ impl KiwiService {
             };
             by_corpus.insert(index, (Vec::new(), AuditFacts::default()));
         }
-        for (index, (ids, facts)) in &by_corpus {
-            let corpus = &self.corpora[*index];
-            let snapshot = scoped[*index].engine.pack().snapshot().to_owned();
+        let mut parts = Vec::with_capacity(by_corpus.len());
+        for (index, (ids, facts)) in by_corpus {
+            let corpus = &self.corpora[index];
+            let scope = &scoped[index];
             corpus.record_feedback(FeedbackRecord {
                 ts: String::new(),
                 principal: identity.principal.clone(),
                 agent: identity.agent.clone(),
                 channel: identity.channel.clone(),
-                snapshot: snapshot.clone(),
+                snapshot: scope.engine.pack().snapshot().to_owned(),
                 query: req.query.clone(),
-                ids: ids.clone(),
+                ids,
                 verdict: req.verdict,
                 note: req.note.as_ref().map(|n| text::truncate_chars(n, 2_000)),
-                view: Some(readable_chains(&scoped[*index])),
+                view: Some(readable_chains(scope)),
             })?;
-            self.audit_one(
-                *index,
-                &scoped[*index],
-                identity,
-                "kiwi_feedback",
-                &snapshot,
+            parts.push(Part {
+                index,
+                engine: Arc::clone(&scope.engine),
                 facts,
-            )?;
+                note: None,
+            });
         }
         let (snapshot, _) = self.snapshots(&scoped);
-        Self::to_json(&FeedbackResponse {
+        let text = Self::to_json(&FeedbackResponse {
             snapshot: &snapshot,
             recorded: true,
             gap: req.verdict == Verdict::Missing,
-        })
+        })?;
+        Ok((text, parts))
     }
 
-    fn propose_tool(&self, identity: &Identity, req: ProposeRequest) -> Result<String, ToolError> {
+    fn propose_tool(&self, identity: &Identity, req: ProposeRequest) -> Outcome {
         if req.changes.is_empty() || req.changes.len() > 20 {
-            return Err(ToolError::Invalid("a proposal has 1 to 20 changes".into()));
+            return Outcome::stopped(ToolError::Invalid("a proposal has 1 to 20 changes".into()));
         }
         if req.rationale.trim().is_empty() {
-            return Err(ToolError::Invalid("a rationale is required".into()));
+            return Outcome::stopped(ToolError::Invalid("a rationale is required".into()));
         }
         if req
             .changes
             .iter()
             .any(|change| change.content.as_ref().is_some_and(|c| c.len() > 512 * 1024))
         {
-            return Err(ToolError::Invalid("a change is limited to 512 KiB".into()));
+            return Outcome::stopped(ToolError::Invalid("a change is limited to 512 KiB".into()));
         }
         let (index, changes) = if self.federated() {
-            let namespace = req.namespace.as_deref().ok_or_else(|| {
-                ToolError::Invalid("this server serves several corpora: set namespace".into())
-            })?;
-            let scoped = self.scope(identity)?;
-            let index = self
-                .namespace_index(&scoped, namespace)
-                .ok_or_else(|| ToolError::Invalid(format!("no namespace `{namespace}`")))?;
+            let target = req
+                .namespace
+                .as_deref()
+                .ok_or_else(|| ToolError::Invalid("this server serves several corpora: set namespace".into()))
+                .and_then(|namespace| {
+                    let scoped = self.scope(identity)?;
+                    self.namespace_index(&scoped, namespace)
+                        .map(|index| (index, namespace))
+                        .ok_or_else(|| ToolError::Invalid(format!("no namespace `{namespace}`")))
+                });
+            let (index, namespace) = match target {
+                Ok(target) => target,
+                Err(error) => return Outcome::stopped(error),
+            };
             let prefix = format!("{namespace}:");
             let changes: Vec<ProposeChange> = req
                 .changes
@@ -1050,21 +1327,36 @@ impl KiwiService {
             (0, req.changes.clone())
         };
         let corpus = &self.corpora[index];
-        let (proposal, snapshot) =
-            corpus.propose(identity, &changes, req.title.as_deref(), &req.rationale)?;
-        Self::to_json(&ProposeResponse {
-            snapshot: &snapshot,
-            namespace: self.federated().then_some(corpus.namespace()),
-            status: "opened",
-            id: &proposal.id,
-            branch: &proposal.branch,
-            link: &proposal.link,
-            merge: &proposal.merge,
-            lint: &proposal.lint,
-        })
+        let proposed = corpus.propose(identity, &changes, req.title.as_deref(), &req.rationale);
+        let answer = proposed.answer.and_then(|(proposal, snapshot)| {
+            Self::to_json(&ProposeResponse {
+                snapshot: &snapshot,
+                namespace: self.federated().then_some(corpus.namespace()),
+                status: "opened",
+                id: &proposal.id,
+                branch: &proposal.branch,
+                link: &proposal.link,
+                merge: &proposal.merge,
+                lint: &proposal.lint,
+            })
+        });
+        Outcome {
+            answer,
+            parts: vec![Part {
+                index,
+                engine: proposed.engine,
+                facts: proposed.facts,
+                note: proposed.note,
+            }],
+            budget: None,
+            results: None,
+            tokens: None,
+            failure: proposed.failure,
+        }
     }
 
-    /// Reads `kiwi://atom/{id}@{rev}`: the L2 of one atom at a pinned snapshot.
+    /// Reads `kiwi://atom/{id}@{rev}`: the L2 of one atom at a pinned snapshot. Audited
+    /// as the tool `resource`.
     ///
     /// The atom must be visible to the caller now: in the current pack, under the
     /// current policy, with its current access chain. Its text at the pinned snapshot is
@@ -1076,6 +1368,23 @@ impl KiwiService {
     /// that does not exist. The snapshot must be of the served source's lineage (see
     /// [`Corpus::engine_at`]).
     pub fn read_resource(&self, identity: &Identity, uri: &str) -> Result<String, ToolError> {
+        let started = Instant::now();
+        let requests = vec![text::truncate_chars(uri, MAX_REQUEST_CHARS)];
+        let outcome = match self.resource(identity, uri) {
+            Ok((text, part)) => Outcome {
+                answer: Ok(text),
+                parts: vec![part],
+                budget: None,
+                results: Some(1),
+                tokens: None,
+                failure: None,
+            },
+            Err(error) => Outcome::stopped(error),
+        };
+        self.finish(identity, "resource", started, requests, outcome)
+    }
+
+    fn resource(&self, identity: &Identity, uri: &str) -> Result<(String, Part), ToolError> {
         let rest = uri
             .strip_prefix("kiwi://atom/")
             .ok_or_else(|| ToolError::Invalid(format!("unknown resource `{uri}`")))?;
@@ -1127,16 +1436,16 @@ impl KiwiService {
             context: None,
         };
         let (response, facts) = engine.read(&view, &request)?;
-        self.audit_one(
-            index,
-            scope,
-            identity,
-            "resource",
-            engine.pack().snapshot(),
-            &facts,
-        )?;
         let atom = response.atoms.into_iter().next().ok_or_else(missing)?;
-        Ok(atom.text)
+        Ok((
+            atom.text,
+            Part {
+                index,
+                engine,
+                facts,
+                note: None,
+            },
+        ))
     }
 }
 

@@ -682,4 +682,8 @@ async fn a_failed_proposal_shows_only_a_reference() {
         .find(|line| line.contains(reference))
         .unwrap_or_else(|| panic!("{audit}"));
     assert!(note.contains("no-such-remote"), "{note}");
+    let record: Value = json(note);
+    assert_eq!(record["status"], "failed");
+    assert_eq!(record["reference"], reference);
+    assert!(record.get("ids").is_none() && record.get("docs").is_none());
 }

@@ -18,7 +18,7 @@ use kiwi_core::model::AccessDecl;
 use kiwi_core::plugin::{Reranker, RetrieverFactory};
 use kiwi_core::rerank::AttachedReranker;
 use kiwi_core::{Engine, EngineConfig, Pack, PackStore, View};
-use kiwi_policy::{Action, AuditEvent, AuditLog, Identity, PolicyGate};
+use kiwi_policy::{Action, AuditEvent, AuditLog, AuditStatus, Identity, PolicyGate};
 
 use crate::feedback::{FeedbackLog, FeedbackRecord};
 use crate::service::{ProposeChange, ToolError};
@@ -118,6 +118,99 @@ fn edit_of(change: &ProposeChange) -> Result<Edit, ToolError> {
             }
         },
     )
+}
+
+/// What a call did as a whole: the same on the record of every corpus it consulted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallSummary {
+    /// How it ended.
+    pub status: AuditStatus,
+    /// Items the answer returned, for the tools that return items.
+    pub results: Option<u32>,
+    /// Tokens of the body the caller received.
+    pub tokens: u32,
+    /// The token budget applied.
+    pub budget: Option<u32>,
+    /// Server time, in milliseconds.
+    pub latency_ms: u64,
+    /// What the caller asked for; recorded only where `audit.record_requests` is set.
+    pub requests: Vec<String>,
+    /// The reference of a failure.
+    pub reference: Option<String>,
+}
+
+/// How a proposal ended, for the call's audit record in its corpus.
+pub struct Proposed {
+    /// The proposal and the snapshot it is based on, or what the caller is told.
+    pub answer: Result<(propose::Proposal, String), ToolError>,
+    /// The engine served when the proposal was decided.
+    pub engine: Arc<Engine>,
+    /// The atoms the proposal changes that the caller can see: the sections it edits and
+    /// the roots of the documents it writes, sets or deletes.
+    pub facts: AuditFacts,
+    /// For whoever reads the local log: why it was refused or failed, or its conflicts
+    /// with content hidden from the caller.
+    pub note: Option<String>,
+    /// The reference of a failure, which the caller is given in a message.
+    pub failure: Option<String>,
+}
+
+/// A proposal that did not open: what the caller is told and what the record keeps.
+struct Unopened {
+    error: ToolError,
+    note: Option<String>,
+    failure: Option<String>,
+}
+
+impl From<ToolError> for Unopened {
+    fn from(error: ToolError) -> Self {
+        Self {
+            error,
+            note: None,
+            failure: None,
+        }
+    }
+}
+
+impl From<kiwi_core::KiwiError> for Unopened {
+    fn from(error: kiwi_core::KiwiError) -> Self {
+        ToolError::from(error).into()
+    }
+}
+
+/// The stable ids of the atoms `uids` of `pack`, distinct in their order, and the
+/// distinct paths of their documents in first-seen order.
+fn stable_ids(pack: &Pack, uids: &[u32]) -> (Vec<String>, Vec<String>) {
+    let mut ids: Vec<String> = Vec::with_capacity(uids.len());
+    let mut docs: Vec<String> = Vec::new();
+    let mut seen_ids = std::collections::HashSet::new();
+    let mut seen_docs = std::collections::HashSet::new();
+    for &uid in uids {
+        let Some(atom) = pack.atom(uid) else {
+            continue;
+        };
+        if seen_ids.insert(uid) {
+            ids.push(atom.id.as_str().to_owned());
+        }
+        if let Some(doc) = pack.doc(atom.doc.to_native())
+            && seen_docs.insert(atom.doc.to_native())
+        {
+            docs.push(doc.path.as_str().to_owned());
+        }
+    }
+    (ids, docs)
+}
+
+/// The root atom of the document at `path` (a corpus-relative Markdown path) in `pack`,
+/// if there is one.
+fn document_root(pack: &Pack, path: &str) -> Result<Option<u32>, ToolError> {
+    let Some(stem) = path.strip_suffix(".md") else {
+        return Ok(None);
+    };
+    Ok(pack.resolve_id(stem)?.filter(|&uid| {
+        pack.doc_of(uid)
+            .is_some_and(|doc| doc.path.as_str() == stem && doc.root.to_native() == uid)
+    }))
 }
 
 /// Engine settings from the corpus configuration.
@@ -533,40 +626,48 @@ impl Corpus {
         }
     }
 
-    /// Appends one audit record.
-    pub fn audit(
+    /// Appends one audit record of a call: `facts` name atoms of `pack`, recorded by
+    /// their stable ids and documents. What the caller asked for is kept only when the
+    /// served configuration sets `audit.record_requests`.
+    pub fn record(
         &self,
         identity: &Identity,
         tool: &str,
-        snapshot: &str,
+        pack: &Pack,
         facts: &AuditFacts,
-    ) -> Result<(), ToolError> {
-        self.record(identity, tool, snapshot, facts, None)
-    }
-
-    /// Appends one audit record with a note for whoever reads the log.
-    fn record(
-        &self,
-        identity: &Identity,
-        tool: &str,
-        snapshot: &str,
-        facts: &AuditFacts,
+        call: &CallSummary,
         note: Option<String>,
     ) -> Result<(), ToolError> {
-        if let Some(log) = &self.audit {
-            log.record(AuditEvent {
-                principal: identity.principal.clone(),
-                agent: identity.agent.clone(),
-                channel: identity.channel.clone(),
-                tool: tool.to_owned(),
-                snapshot: snapshot.to_owned(),
-                namespace: self.namespace.clone(),
-                atoms: facts.atoms.clone(),
-                blocked: facts.blocked,
-                note,
-            })
-            .map_err(|e| ToolError::Internal(e.to_string()))?;
-        }
+        let Some(log) = &self.audit else {
+            return Ok(());
+        };
+        let (ids, docs) = stable_ids(pack, &facts.atoms);
+        let queries = if self.served().config.audit.record_requests {
+            call.requests.clone()
+        } else {
+            Vec::new()
+        };
+        log.record(AuditEvent {
+            principal: identity.principal.clone(),
+            agent: identity.agent.clone(),
+            channel: identity.channel.clone(),
+            tool: tool.to_owned(),
+            snapshot: pack.snapshot().to_owned(),
+            namespace: self.namespace.clone(),
+            atoms: facts.atoms.clone(),
+            blocked: facts.blocked,
+            status: Some(call.status),
+            ids,
+            docs,
+            results: call.results,
+            tokens: Some(call.tokens),
+            budget: call.budget,
+            latency_ms: Some(call.latency_ms),
+            queries,
+            reference: call.reference.clone(),
+            note,
+        })
+        .map_err(|e| ToolError::Internal(e.to_string()))?;
         Ok(())
     }
 
@@ -578,7 +679,8 @@ impl Corpus {
     }
 
     /// Opens a proposal on this corpus's repository. `requested` uses this corpus's own
-    /// (unqualified) ids. Returns the proposal and the snapshot it is based on.
+    /// (unqualified) ids. Returns the proposal and the snapshot it is based on, with what
+    /// its audit record keeps.
     ///
     /// The proposal is planned on the base revision itself, not on the served pack:
     /// sections are found again there by id and access chain and edited by the
@@ -590,12 +692,38 @@ impl Corpus {
         requested: &[ProposeChange],
         title: Option<&str>,
         rationale: &str,
-    ) -> Result<(propose::Proposal, String), ToolError> {
-        if !self.options.proposals {
-            return Err(ToolError::Invalid("proposals are disabled on this server".into()));
-        }
+    ) -> Proposed {
         let served = self.served();
-        let engine = Arc::clone(&served.engine);
+        match self.open_proposal(&served, identity, requested, title, rationale) {
+            Ok((proposal, snapshot, facts, note)) => Proposed {
+                answer: Ok((proposal, snapshot)),
+                engine: Arc::clone(&served.engine),
+                facts,
+                note,
+                failure: None,
+            },
+            Err(unopened) => Proposed {
+                answer: Err(unopened.error),
+                engine: Arc::clone(&served.engine),
+                facts: AuditFacts::default(),
+                note: unopened.note,
+                failure: unopened.failure,
+            },
+        }
+    }
+
+    fn open_proposal(
+        &self,
+        served: &Served,
+        identity: &Identity,
+        requested: &[ProposeChange],
+        title: Option<&str>,
+        rationale: &str,
+    ) -> Result<(propose::Proposal, String, AuditFacts, Option<String>), Unopened> {
+        if !self.options.proposals {
+            return Err(ToolError::Invalid("proposals are disabled on this server".into()).into());
+        }
+        let engine = &served.engine;
         let gate = &served.gate;
         let snapshot = engine.pack().snapshot().to_owned();
         // A proposal is decided on the very commit the server serves; a server of the
@@ -603,7 +731,8 @@ impl Corpus {
         if engine.pack().data().source.as_str() != "git" {
             return Err(ToolError::Invalid(
                 "proposals need a server of a commit; this one serves the working files".into(),
-            ));
+            )
+            .into());
         }
         let target = ProposalTarget {
             corpus: self.options.corpus.clone(),
@@ -617,10 +746,13 @@ impl Corpus {
         let plan = match propose::plan(&target, &permissions, &edits) {
             Ok(plan) => plan,
             Err(ProposeError::Refused(message)) => {
-                self.audit_note(identity, &snapshot, format!("refused: {message}"))?;
-                return Err(ToolError::Invalid(message));
+                return Err(Unopened {
+                    note: Some(format!("refused: {message}")),
+                    error: ToolError::Invalid(message),
+                    failure: None,
+                });
             }
-            Err(ProposeError::Failed(cause)) => return Err(self.failed(identity, &snapshot, &cause)),
+            Err(ProposeError::Failed(cause)) => return Err(Self::failed(&cause)),
         };
         let title = title
             .filter(|t| !t.trim().is_empty())
@@ -642,42 +774,53 @@ impl Corpus {
                 .and_then(|u| u.emails.first().cloned())
                 .unwrap_or_else(|| format!("{}@kiwi.invalid", identity.principal)),
         };
+        // Read before the proposal opens, so nothing fails once it is open.
+        let facts = Self::changed_atoms(served, identity, &edits)?;
         let proposal = match propose::open(&target, &plan, &title, rationale, &author) {
             Ok(proposal) => proposal,
-            Err(cause) => return Err(self.failed(identity, &snapshot, &cause)),
+            Err(cause) => return Err(Self::failed(&cause)),
         };
         let mut notes = plan.notes.clone();
         notes.extend(proposal.owner_review_unapplied.iter().cloned());
         let note = (!notes.is_empty()).then(|| notes.join("; "));
-        self.record(identity, "kiwi_propose", &snapshot, &AuditFacts::default(), note)?;
-        Ok((proposal, snapshot))
+        Ok((proposal, snapshot, facts, note))
+    }
+
+    /// The atoms `edits` change that the caller can see in the served pack: each edited
+    /// section, and the root of each document written, set or deleted. A path that is
+    /// no document of the pack (a new file) or one hidden from the caller names none.
+    fn changed_atoms(served: &Served, identity: &Identity, edits: &[Edit]) -> Result<AuditFacts, ToolError> {
+        let (view, _) = served.view(identity)?;
+        let pack = served.engine.pack();
+        let mut facts = AuditFacts::default();
+        for edit in edits {
+            let uid = match edit {
+                Edit::Section { id, .. } => pack.resolve_id(id)?,
+                Edit::Set { path, .. } | Edit::Write { path, .. } | Edit::Delete { path } => {
+                    document_root(pack, path)?
+                }
+            };
+            if let Some(uid) = uid.filter(|&uid| view.contains(uid))
+                && !facts.atoms.contains(&uid)
+            {
+                facts.atoms.push(uid);
+            }
+        }
+        Ok(facts)
     }
 
     /// A proposal that failed for a reason that may concern content the caller cannot
     /// see, or the server (a forge's output, a path): the cause goes to the operator's
-    /// log and the audit log under a reference, the caller gets only the reference.
-    fn failed(&self, identity: &Identity, snapshot: &str, cause: &dyn std::fmt::Display) -> ToolError {
+    /// log and the audit note under a reference, the caller gets only the reference.
+    fn failed(cause: &dyn std::fmt::Display) -> Unopened {
         let reference = crate::server::log_internal(&format!("kiwi_propose: {cause}"));
-        if let Err(error) = self.audit_note(
-            identity,
-            snapshot,
-            format!("failed (reference {reference}): {cause}"),
-        ) {
-            crate::server::log_internal(&error.to_string());
+        Unopened {
+            error: ToolError::Invalid(format!(
+                "the proposal could not be prepared (reference {reference})"
+            )),
+            note: Some(format!("failed (reference {reference}): {cause}")),
+            failure: Some(reference),
         }
-        ToolError::Invalid(format!(
-            "the proposal could not be prepared (reference {reference})"
-        ))
-    }
-
-    fn audit_note(&self, identity: &Identity, snapshot: &str, note: String) -> Result<(), ToolError> {
-        self.record(
-            identity,
-            "kiwi_propose",
-            snapshot,
-            &AuditFacts::default(),
-            Some(note),
-        )
     }
 
     /// The engine for a pinned snapshot of this corpus: the current one, or a kept pack

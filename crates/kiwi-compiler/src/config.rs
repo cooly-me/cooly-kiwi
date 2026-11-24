@@ -26,6 +26,9 @@
 //! backend = "http"
 //! url = "http://127.0.0.1:8080/rerank"
 //!
+//! [audit]
+//! record_requests = false   # true writes callers' queries into the records
+//!
 //! [[audit.sinks]]
 //! kind = "stderr"           # or "stdout" (not with stdio serving), "http", "syslog"
 //! ```
@@ -362,10 +365,15 @@ impl RerankConfig {
     }
 }
 
-/// Audit settings: where records go besides the local hash-chained log.
+/// Audit settings: what records hold, and where they go besides the local hash-chained
+/// log.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct AuditConfig {
+    /// Write what callers asked for (search queries, read ids, map scopes...) into each
+    /// record's `queries`, for the local log and every sink. Off by default: the text of
+    /// a query can be personal or confidential in itself.
+    pub record_requests: bool,
     /// Sinks, each fed every record through its own bounded queue.
     pub sinks: Vec<SinkConfig>,
 }
@@ -673,5 +681,12 @@ mod tests {
         assert_eq!(http.plugins.rerank.top_k(), DEFAULT_HTTP_TOP_K);
         let sinks = KiwiConfig::parse("[[audit.sinks]]\nkind = \"stdout\"\n[[audit.sinks]]\nkind = \"http\"\nurl = \"https://siem.example.com/kiwi\"\n").unwrap();
         assert_eq!(sinks.audit.sinks.len(), 2);
+        assert!(
+            !sinks.audit.record_requests,
+            "requests are not recorded by default"
+        );
+        let requests = KiwiConfig::parse("[audit]\nrecord_requests = true\n").unwrap();
+        assert!(requests.audit.record_requests);
+        assert!(KiwiConfig::parse("[audit]\nrecord_requests = \"yes\"\n").is_err());
     }
 }

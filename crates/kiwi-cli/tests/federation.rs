@@ -620,6 +620,42 @@ fn ids_citations_and_audit_are_per_corpus() {
         );
         assert!(kiwi_policy::audit::verify(&root.join(".kiwi/state/audit.log"), None).is_ok());
     }
+    // Each record names its own corpus's atoms by their unqualified stable ids; a call
+    // refused before any corpus answered is recorded in each.
+    let records = |root: &Path| -> Vec<Value> {
+        std::fs::read_to_string(root.join(".kiwi/state/audit.log"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    };
+    let (acme_log, beta_log) = (records(&acme.root), records(&beta.root));
+    let of = |log: &[Value], tool: &str, status: &str| -> Vec<Value> {
+        log.iter()
+            .filter(|r| r["tool"] == tool && r["status"] == status)
+            .cloned()
+            .collect()
+    };
+    assert_eq!(of(&acme_log, "kiwi_read", "refused").len(), 1, "the ambiguous id");
+    assert_eq!(of(&beta_log, "kiwi_read", "refused").len(), 1, "the ambiguous id");
+    let acme_read = &of(&acme_log, "kiwi_read", "ok")[0];
+    let beta_read = &of(&beta_log, "kiwi_read", "ok")[0];
+    assert_eq!(acme_read["ids"][0], "adr/adr-005-idempotency-keys");
+    assert_eq!(beta_read["ids"], json!(["treasury"]));
+    assert_eq!(beta_read["docs"], json!(["treasury"]));
+    assert_eq!(
+        (&beta_read["results"], &acme_read["results"]),
+        (&json!(2), &json!(2)),
+        "the call's results, on each corpus's record"
+    );
+    assert_eq!(of(&beta_log, "resource", "ok")[0]["ids"], json!(["treasury"]));
+    assert!(of(&acme_log, "resource", "ok").is_empty());
+    for record in acme_log.iter().chain(&beta_log) {
+        for id in record["ids"].as_array().into_iter().flatten() {
+            let id = id.as_str().unwrap();
+            assert!(!id.starts_with("acme:") && !id.starts_with("beta:"), "{id}");
+        }
+    }
 }
 
 #[test]

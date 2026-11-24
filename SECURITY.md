@@ -38,15 +38,24 @@ agree on a disclosure date with you once a fix is ready.
   `https` (or `http` on loopback), their secrets come from environment variables, and
   they follow no redirects. Query text you send to Kiwi is sent to the embeddings API
   when vectors come from one.
-- Audit sinks receive each record of the local log (sequence, time, who, which agent
-  and channel, which tool, corpus and snapshot, atom uids, how many matches were
-  withheld, the chain's `prev` and `hash`), never content. A record's `note`, which can
-  name content hidden from the caller (why a proposal was refused, its conflicts with
-  hidden documents), stays in the local log: sinks receive only a keyed BLAKE3 of it
-  (`note_mac`), under a key kept beside the local log (refused when others may read
-  it), so a receiver cannot test a guess of the note; quarantine records carry a keyed
-  hash of the torn bytes' hash, not the hash or its size. A sink that is down drops records after its queue fills; the local
-  log stays complete.
+- The audit log and its sinks hold, for each call: sequence, time, who, which agent and
+  channel, which tool, corpus and snapshot, the status (`ok`, `refused`, `failed` and
+  its reference), the stable ids and document paths of the atoms returned (or named by a
+  feedback, or changed by a proposal) with their pack uids, how many items and how many
+  withheld matches, the response's tokens, the budget, the server time, and the chain's
+  `prev` and `hash`; never content. Ids and documents are only ever of atoms the caller
+  can see (the leak suite checks every record), and withheld matches only a count. What
+  the caller asked for (queries, read ids, scopes, the paths and sections a proposal
+  names) is written, to the log and every sink, only when the corpus sets
+  `audit.record_requests = true`: turn it on knowing that query text can itself be
+  personal or confidential, and that it then leaves the machine with every sink.
+  Contents, rationales, filters and feedback notes are never recorded. A record's
+  `note`, which can name content hidden from the caller (why a proposal was refused, its
+  conflicts with hidden documents), stays in the local log: sinks receive only a keyed
+  BLAKE3 of it (`note_mac`), under a key kept beside the local log (refused when others
+  may read it), so a receiver cannot test a guess of the note; quarantine records carry
+  a keyed hash of the torn bytes' hash, not the hash or its size. A sink that is down
+  drops records after its queue fills; the local log stays complete.
 - Over stdio, the caller is a trusted local user: the identity comes from the command
   line or the Git e-mail, asserted, not proven. Anyone who can run `kiwi serve` locally
   can choose its `--principal` and can read the corpus's files; stdio governance keeps
@@ -71,7 +80,8 @@ agree on a disclosure date with you once a fix is ready.
 - The audit chain detects edits, reordering and deletions inside the log. Truncation of
   the tail is only detected against a saved anchor (`kiwi audit verify --anchor`). A
   line a crash left half written is moved aside and recorded as a break in the chain,
-  which `kiwi audit verify` reports.
+  which `kiwi audit verify` reports. The local `note` of a refused or failed proposal
+  may quote the paths the caller named.
 - A corpus configuration may read secrets only from the environment variables the
   operator lists in `KIWI_SECRET_ENV`, and never the HS256 token secret, which is
   reserved before any corpus opens.

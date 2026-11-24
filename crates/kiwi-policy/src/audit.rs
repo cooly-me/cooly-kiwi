@@ -1,4 +1,10 @@
-//! The audit log: one JSON line per answer, append-only and hash-chained.
+//! The audit log: one JSON line per call, append-only and hash-chained.
+//!
+//! A record says who called which tool, how the call ended, which atoms it returned by
+//! their stable ids and documents, the tokens of the body the caller received and the
+//! budget applied, and the server time; what the caller asked for only when the corpus
+//! records requests. Fields added after Kiwi 0.1.0 are left out when empty, so the
+//! records of older logs still hash as they were written.
 //!
 //! Every record carries the hash of the record before it, and its own hash covers its
 //! content and that link. Editing, reordering or deleting any line breaks the chain at
@@ -62,8 +68,24 @@ pub enum AuditError {
     },
 }
 
+/// How a call ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AuditStatus {
+    /// Answered.
+    Ok,
+    /// Refused with a message to the caller (invalid arguments, an unknown id, a proposal
+    /// the policy or the corpus does not allow).
+    Refused,
+    /// An internal error; the caller was given only its `reference`.
+    Failed,
+}
+
 /// What one record says.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Every field added after Kiwi 0.1.0 is left out of the record when empty or unset, so
+/// the records of older logs, which never had them, hash and verify as written.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditEvent {
     /// The user.
     pub principal: String,
@@ -79,14 +101,49 @@ pub struct AuditEvent {
     /// written by Kiwi 0.1, which had no such field, still verify.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub namespace: String,
-    /// Atom uids returned.
+    /// Pack uids of `ids`. They name atoms of one pack only: `ids` is what stays
+    /// meaningful once the corpus is rebuilt.
     pub atoms: Vec<u32>,
     /// Matches withheld by the policy gate.
     pub blocked: u32,
+    /// How the call ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<AuditStatus>,
+    /// The stable ids (`path#anchor`) of the atoms of this corpus the answer returned
+    /// (or a feedback named, or a proposal changed), distinct, in answer order. Only
+    /// atoms the caller can see.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ids: Vec<String>,
+    /// The distinct document paths (without `.md`) `ids` belong to, in first-seen order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub docs: Vec<String>,
+    /// Items the answer returned: search results, map nodes, read atoms, trace nodes, or
+    /// one atom for a resource. Unset for feedback and proposals, and on a refusal or a
+    /// failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub results: Option<u32>,
+    /// Tokens of the body the caller received (the answer, or the refusal or failure
+    /// message), counted with the budget's tokenizer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<u32>,
+    /// The token budget applied (search and map).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<u32>,
+    /// Milliseconds the server spent on the call, until the record was written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<u64>,
+    /// What the caller asked for (search queries, read ids, a map scope, a trace id, a
+    /// feedback query, the paths and sections a proposal names, a resource URI). Only
+    /// when the corpus sets `audit.record_requests`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queries: Vec<String>,
+    /// The reference of a failure, as the caller was given it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
     /// What the caller was not told, for whoever reads the local log: why a proposal
     /// was refused or failed, or its conflicts with content hidden from the caller. Left
     /// out when empty, so records without one hash as before. Never sent to a sink,
-    /// which receives `note_blake3` instead.
+    /// which receives `note_mac` instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
@@ -336,38 +393,39 @@ pub fn note_key_path(path: &Path) -> PathBuf {
     path.with_file_name(name)
 }
 
+/// The key of the notes' MACs of the log `path`, read from its key file. The key file
+/// must be its owner's only.
+fn read_note_key(path: &Path) -> std::io::Result<[u8; 32]> {
+    let key_path = note_key_path(path);
+    // The mode is checked on the handle the key is read from, so the file read is the
+    // file checked.
+    let mut file = File::open(&key_path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = file.metadata()?.permissions().mode();
+        if mode & 0o077 != 0 {
+            return Err(std::io::Error::other(format!(
+                "{} is readable by others (mode {:o}); make it its owner's only (chmod 600)",
+                key_path.display(),
+                mode & 0o777
+            )));
+        }
+    }
+    let mut text = String::new();
+    file.read_to_string(&mut text)?;
+    let bytes = hex::decode(text.trim()).map_err(std::io::Error::other)?;
+    bytes
+        .try_into()
+        .map_err(|_| std::io::Error::other(format!("{} is not a 32-byte key", key_path.display())))
+}
+
 /// The key of the notes' MACs of the log `path`: read from its key file, or made from
 /// the operating system's random source and written there (readable by its owner only)
 /// on first use. Several processes on one log agree on it: the file is created once.
 fn note_key(path: &Path) -> std::io::Result<[u8; 32]> {
     let key_path = note_key_path(path);
-    let parse = |text: &str| -> std::io::Result<[u8; 32]> {
-        let bytes = hex::decode(text.trim()).map_err(std::io::Error::other)?;
-        bytes
-            .try_into()
-            .map_err(|_| std::io::Error::other(format!("{} is not a 32-byte key", key_path.display())))
-    };
-    // The mode is checked on the handle the key is read from, so the file read is the
-    // file checked.
-    let read_existing = || -> std::io::Result<[u8; 32]> {
-        let mut file = File::open(&key_path)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = file.metadata()?.permissions().mode();
-            if mode & 0o077 != 0 {
-                return Err(std::io::Error::other(format!(
-                    "{} is readable by others (mode {:o}); make it its owner's only (chmod 600)",
-                    key_path.display(),
-                    mode & 0o777
-                )));
-            }
-        }
-        let mut text = String::new();
-        file.read_to_string(&mut text)?;
-        parse(&text)
-    };
-    match read_existing() {
+    match read_note_key(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         other => return other,
     }
@@ -394,7 +452,7 @@ fn note_key(path: &Path) -> std::io::Result<[u8; 32]> {
     let _ = std::fs::remove_file(&temp);
     match linked {
         Ok(()) => Ok(key),
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => read_existing(),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => read_note_key(path),
         Err(error) => Err(error),
     }
 }
@@ -478,11 +536,7 @@ fn quarantine(path: &Path, tail: &mut Tail, good_len: u64) -> Result<String, Aud
         agent: "kiwi".into(),
         channel: "local".into(),
         tool: QUARANTINE_TOOL.into(),
-        snapshot: String::new(),
-        namespace: String::new(),
-        atoms: Vec::new(),
-        blocked: 0,
-        note: None,
+        ..AuditEvent::default()
     };
     let record = Quarantine {
         file: name,
@@ -708,8 +762,7 @@ mod tests {
             snapshot: "abc".into(),
             namespace: "acme".into(),
             atoms: vec![n, n + 1],
-            blocked: 0,
-            note: None,
+            ..AuditEvent::default()
         }
     }
 
@@ -911,6 +964,101 @@ mod tests {
         let kept = std::fs::read(dir.path().join(&moved.quarantine.file)).unwrap();
         assert_eq!(kept, torn);
         assert_eq!(moved.quarantine.blake3, blake3::hash(torn).to_hex().to_string());
+    }
+
+    /// A log written by the Kiwi 0.1.0 binary: tool records of every kind, a refused
+    /// proposal's note and a quarantined torn line.
+    const V0_1_0_LOG: &str = include_str!("../tests/fixtures/audit-v0.1.0.log");
+    const V0_1_0_LAST: &str = "a9c72f559b4de9fcbbc21b4fdaaf2474498fdc2677ca6745a6fbf477ff769d99";
+
+    fn full_event() -> AuditEvent {
+        AuditEvent {
+            status: Some(AuditStatus::Ok),
+            ids: vec!["product/fees#rules".into(), "product/fees".into()],
+            docs: vec!["product/fees".into()],
+            results: Some(2),
+            tokens: Some(311),
+            budget: Some(800),
+            latency_ms: Some(4),
+            queries: vec!["take rate".into()],
+            ..event(7)
+        }
+    }
+
+    #[test]
+    fn a_log_written_by_kiwi_0_1_0_verifies_and_grows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.log");
+        std::fs::write(&path, V0_1_0_LOG).unwrap();
+        let report = verify(&path, Some(V0_1_0_LAST)).unwrap();
+        assert_eq!((report.records, report.breaks.len()), (10, 1));
+        // Every old record reads back into the new shape and hashes as written.
+        for line in V0_1_0_LOG.lines() {
+            let record: Record = serde_json::from_str(line).unwrap();
+            assert_eq!(hash_body(&record.body).unwrap(), record.hash);
+            assert_eq!(record.body.event.status, None);
+            assert!(record.body.event.ids.is_empty());
+        }
+        // A server of this version extends it with records carrying the new fields.
+        let log = AuditLog::open(&path, Vec::new()).unwrap();
+        let last = log.record(full_event()).unwrap();
+        drop(log);
+        let report = verify(&path, Some(&last)).unwrap();
+        assert_eq!(report.records, 11);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with(V0_1_0_LOG), "old lines are never rewritten");
+        let added: serde_json::Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
+        assert_eq!(added["prev"], V0_1_0_LAST);
+        assert_eq!(added["status"], "ok");
+        assert_eq!(added["ids"][0], "product/fees#rules");
+        assert_eq!(added["docs"], serde_json::json!(["product/fees"]));
+        assert_eq!(
+            (
+                &added["results"],
+                &added["tokens"],
+                &added["budget"],
+                &added["latency_ms"]
+            ),
+            (
+                &serde_json::json!(2),
+                &serde_json::json!(311),
+                &serde_json::json!(800),
+                &serde_json::json!(4)
+            )
+        );
+        assert_eq!(added["queries"], serde_json::json!(["take rate"]));
+        // Editing a new field is caught like any other edit.
+        let forged = text.replacen("\"tokens\":311", "\"tokens\":3", 1);
+        std::fs::write(&path, forged).unwrap();
+        let error = verify(&path, None).unwrap_err();
+        assert!(matches!(error, AuditError::Broken { line: 11, .. }), "{error}");
+    }
+
+    #[test]
+    fn empty_new_fields_are_left_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.log");
+        let log = AuditLog::open(&path, Vec::new()).unwrap();
+        log.record(event(1)).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        for key in [
+            "status",
+            "ids",
+            "docs",
+            "results",
+            "tokens",
+            "budget",
+            "latency_ms",
+            "queries",
+            "reference",
+            "note",
+        ] {
+            assert!(!text.contains(&format!("\"{key}\"")), "{key}: {text}");
+        }
+        assert_eq!(
+            serde_json::to_string(&AuditStatus::Refused).unwrap(),
+            "\"refused\""
+        );
     }
 
     #[test]

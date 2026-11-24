@@ -42,7 +42,12 @@ pub fn log_internal(message: &str) -> String {
 
 /// The error an MCP client receives for an internal failure.
 fn internal(message: &str) -> ErrorData {
-    let reference = log_internal(message);
+    failed(&log_internal(message))
+}
+
+/// The error an MCP client receives for an internal failure already logged under
+/// `reference`.
+fn failed(reference: &str) -> ErrorData {
     ErrorData::internal_error(format!("internal error (reference {reference})"), None)
 }
 
@@ -175,6 +180,7 @@ impl ServerHandler for KiwiServer {
                 CallToolResult::error(vec![ContentBlock::text(message)]).into()
             }
             Err(ToolError::Internal(message)) => return Err(internal(&message)),
+            Err(ToolError::Failed(reference)) => return Err(failed(&reference)),
         })
     }
 
@@ -204,6 +210,7 @@ impl ServerHandler for KiwiServer {
             Ok(text) => Ok(ReadResourceResult::new(vec![ResourceContents::text(text, request.uri)]).into()),
             Err(ToolError::Invalid(message)) => Err(ErrorData::resource_not_found(message, None)),
             Err(ToolError::Internal(message)) => Err(internal(&message)),
+            Err(ToolError::Failed(reference)) => Err(failed(&reference)),
         }
     }
 }
