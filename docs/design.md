@@ -698,16 +698,16 @@ question once.
   compiled and re-embedded). The first query that needs vectors loads the model: 0.64 s.
 
 **Scale**: 100,000 synthetic atoms (5,000 documents of 20 sections, 10 % confidential;
-the caller sees 90,000), BM25 and the `hash` embedder (no model), the same generator
-and settings for both versions, 20 timed repetitions:
+the caller sees 90,000), BM25 and the `hash` embedder (no model), 20 timed repetitions
+(`kiwi bench --embedder hash --synthetic 100000`):
 
-| | v0.1.0 | this version |
-| --- | ---: | ---: |
-| Full build | 16.1 s | 12.0 s |
-| Rebuild after changing one file | 4.0 s | 1.1 s |
-| Exact lookup by id, p50 / p99 | 0.002 / 0.004 ms | 0.002 / 0.007 ms |
-| BM25 search, p50 / p99 | 3.57 / 4.18 ms | 0.90 / 1.07 ms |
-| Vector search (`hash`), p50 / p99 | 0.46 / 0.52 ms | 0.49 / 0.55 ms |
-| Cold start in-process | 12.5 ms | 12.4 ms |
-| Pack size | 148.4 MB | 156.7 MB |
-| Peak memory of the run | 1.60 GB | 1.76 GB |
+| | Measured |
+| --- | ---: |
+| Full build | 12.0 s |
+| Rebuild after changing one file | 1.1 s |
+| Exact lookup by id, p50 / p99 | 0.002 / 0.007 ms |
+| BM25 search, p50 / p99 | 0.90 / 1.07 ms |
+| Vector search (`hash`), p50 / p99 | 0.49 / 0.55 ms |
+| Cold start in-process | 12.4 ms |
+| Pack size | 156.7 MB |
+| Peak memory of the run | 1.76 GB |
