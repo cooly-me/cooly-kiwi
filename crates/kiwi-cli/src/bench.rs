@@ -65,6 +65,10 @@ pub struct BenchArgs {
     /// Print the results as JSON.
     #[arg(long)]
     json: bool,
+    /// Compare the results with this baseline (TOML, see `bench/baselines/`) and exit
+    /// with code 1 on a regression beyond its tolerances.
+    #[arg(long)]
+    baseline: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -119,6 +123,8 @@ pub struct ModeResult {
     pub mode: String,
     /// Mean recall@5 over answerable questions (atom level).
     pub recall_at_5: f64,
+    /// Mean recall@10 over answerable questions (atom level).
+    pub recall_at_10: f64,
     /// Mean recall@5 at document level (an answer counts when its document is among
     /// the documents of the top five results), comparable with `grep+read`.
     pub doc_recall_at_5: f64,
@@ -131,6 +137,8 @@ pub struct ModeResult {
     pub mean_tokens: f64,
     /// Median latency of the discovery call, milliseconds.
     pub p50_ms: f64,
+    /// 95th percentile latency of the discovery call, milliseconds.
+    pub p95_ms: f64,
     /// 99th percentile latency of the discovery call, milliseconds.
     pub p99_ms: f64,
     /// Hidden answers returned to principals who may not see them.
@@ -164,6 +172,11 @@ pub struct Report {
     pub incremental_build_ms: f64,
     /// Atoms compiled by that rebuild.
     pub incremental_atoms: usize,
+    /// Size of the pack file, bytes.
+    pub pack_bytes: u64,
+    /// Reloading the served corpus: parsing the policy and principals, opening the
+    /// pack with its retrievers and swapping it in, median ms.
+    pub reload_ms: f64,
     /// Rebuild with no change, ms, and atoms compiled (must be 0).
     pub noop_build_ms: f64,
     /// Atoms compiled by the no-change rebuild.
@@ -190,18 +203,18 @@ pub struct ScaleReport {
     pub pack_bytes: u64,
     /// Cold start (open, retrievers, first search), median ms.
     pub cold_start_ms: f64,
-    /// Exact id lookup through `kiwi_search`: p50, p99 ms.
-    pub exact_ms: (f64, f64),
-    /// Structural filter query: p50, p99 ms.
-    pub structural_ms: (f64, f64),
-    /// BM25 query through the planner: p50, p99 ms.
-    pub bm25_ms: (f64, f64),
-    /// BM25 retriever alone: p50, p99 ms.
-    pub bm25_retriever_ms: (f64, f64),
-    /// Hamming scan over all atoms (top 64): p50, p99 ms.
-    pub vec_scan_ms: (f64, f64),
-    /// Vector query through the planner (hash embedder): p50, p99 ms.
-    pub vec_ms: (f64, f64),
+    /// Exact id lookup through `kiwi_search`: p50, p95, p99 ms.
+    pub exact_ms: (f64, f64, f64),
+    /// Structural filter query: p50, p95, p99 ms.
+    pub structural_ms: (f64, f64, f64),
+    /// BM25 query through the planner: p50, p95, p99 ms.
+    pub bm25_ms: (f64, f64, f64),
+    /// BM25 retriever alone: p50, p95, p99 ms.
+    pub bm25_retriever_ms: (f64, f64, f64),
+    /// Hamming scan over all atoms (top 64): p50, p95, p99 ms.
+    pub vec_scan_ms: (f64, f64, f64),
+    /// Vector query through the planner (hash embedder): p50, p95, p99 ms.
+    pub vec_ms: (f64, f64, f64),
 }
 
 fn percentile(samples: &mut [f64], p: f64) -> f64 {
@@ -336,11 +349,9 @@ fn run_search_mode(
             continue;
         }
         let top5: Vec<u32> = returned.iter().take(5).copied().collect();
-        let top5_set: BTreeSet<u32> = top5.iter().copied().collect();
-        s.recalls.push((
-            question.id.clone(),
-            answers.intersection(&top5_set).count() as f64 / answers.len() as f64,
-        ));
+        s.recalls.push((question.id.clone(), recall(&answers, &top5)));
+        s.recalls10
+            .push(recall(&answers, &returned[..returned.len().min(10)]));
         s.doc_recalls.push(doc_recall(pack, &answers, &top5));
         s.reciprocal.push(reciprocal_rank(&answers, &returned));
         let ids: Vec<String> = response.results.iter().map(|r| r.id.clone()).collect();
@@ -353,6 +364,7 @@ fn run_search_mode(
 
 struct Samples {
     recalls: Vec<(String, f64)>,
+    recalls10: Vec<f64>,
     doc_recalls: Vec<f64>,
     reciprocal: Vec<f64>,
     tokens: Vec<f64>,
@@ -365,6 +377,7 @@ impl Samples {
     fn new() -> Self {
         Self {
             recalls: Vec::new(),
+            recalls10: Vec::new(),
             doc_recalls: Vec::new(),
             reciprocal: Vec::new(),
             tokens: Vec::new(),
@@ -373,6 +386,12 @@ impl Samples {
             leaks: 0,
         }
     }
+}
+
+/// The share of `answers` among `top`.
+fn recall(answers: &BTreeSet<u32>, top: &[u32]) -> f64 {
+    let top: BTreeSet<u32> = top.iter().copied().collect();
+    answers.intersection(&top).count() as f64 / answers.len().max(1) as f64
 }
 
 /// 1 / rank of the first answer among the first ten results, 0 when none is there.
@@ -411,6 +430,7 @@ fn finish(name: &str, samples: Samples) -> ModeResult {
         samples.leaks,
     );
     result.doc_recall_at_5 = mean(&samples.doc_recalls);
+    result.recall_at_10 = mean(&samples.recalls10);
     result.mrr = mean(&samples.reciprocal);
     result.discovery_tokens = mean(&samples.discovery);
     result
@@ -441,10 +461,12 @@ fn summarize(
         recall_at_5: mean(&recalls),
         mean_tokens: mean(&tokens),
         p50_ms: percentile(&mut latencies, 50.0),
+        p95_ms: percentile(&mut latencies, 95.0),
         p99_ms: percentile(&mut latencies, 99.0),
         leaks,
         misses,
         doc_recall_at_5: 0.0,
+        recall_at_10: 0.0,
         mrr: 0.0,
         discovery_tokens: 0.0,
     }
@@ -495,11 +517,8 @@ fn run_navigation(
                 .count();
             continue;
         }
-        let picked_set: BTreeSet<u32> = picked.iter().copied().collect();
-        s.recalls.push((
-            question.id.clone(),
-            answers.intersection(&picked_set).count() as f64 / answers.len() as f64,
-        ));
+        s.recalls.push((question.id.clone(), recall(&answers, &picked)));
+        s.recalls10.push(recall(&answers, &picked));
         s.doc_recalls.push(doc_recall(pack, &answers, &picked));
         s.reciprocal.push(reciprocal_rank(&answers, &picked));
         let discovery = count_tokens(&serde_json::to_string(&map)?) as usize;
@@ -521,6 +540,7 @@ fn run_grep(
     let mut latencies = Vec::new();
     let mut leaks = 0;
     let mut reciprocal = Vec::new();
+    let mut recalls10 = Vec::new();
     let folded: BTreeMap<&String, String> = corpus_files.iter().map(|(p, t)| (p, text::fold(t))).collect();
     for question in questions {
         let terms = content_words(&question.queries.join(" "));
@@ -561,6 +581,16 @@ fn run_grep(
             continue;
         }
         let found = answer_docs.iter().filter(|d| top_docs.contains(d)).count();
+        let found10 = answer_docs
+            .iter()
+            .filter(|d| {
+                ranked
+                    .iter()
+                    .take(10)
+                    .any(|(_, p)| p.trim_end_matches(".md") == d.as_str())
+            })
+            .count();
+        recalls10.push(found10 as f64 / answer_docs.len().max(1) as f64);
         reciprocal.push(
             ranked
                 .iter()
@@ -582,6 +612,7 @@ fn run_grep(
     }
     let mut result = summarize("grep+read", recalls, tokens, latencies, leaks);
     result.doc_recall_at_5 = result.recall_at_5;
+    result.recall_at_10 = recalls10.iter().sum::<f64>() / recalls10.len().max(1) as f64;
     result.mrr = reciprocal.iter().sum::<f64>() / reciprocal.len().max(1) as f64;
     Ok(result)
 }
@@ -775,19 +806,181 @@ fn copy_markdown_tree(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Runs the benchmark.
+/// Runs the benchmark. Exits with code 1 on a leak, or on a regression beyond the
+/// tolerances of `--baseline`.
 pub fn run(args: &BenchArgs) -> Result<()> {
+    let baseline = match &args.baseline {
+        Some(path) => Some(Baseline::read(path)?),
+        None => None,
+    };
     let report = measure(args)?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
-        return Ok(());
+    } else {
+        print_report(&report);
     }
-    print_report(&report);
+    let mut failed = false;
     if !report.leak_violations.is_empty() || report.modes.iter().any(|m| m.leaks > 0 && m.mode != "grep+read")
     {
+        eprintln!("kiwi bench: hidden content was returned");
+        failed = true;
+    }
+    if let Some(baseline) = &baseline {
+        let regressions = baseline.regressions(&report);
+        for regression in &regressions {
+            eprintln!("kiwi bench: regression: {regression}");
+        }
+        failed |= !regressions.is_empty();
+    }
+    if failed {
         std::process::exit(1);
     }
     Ok(())
+}
+
+/// Expected results and the regressions tolerated (`kiwi bench --baseline`). Every
+/// figure is optional; a mode named here must be measured.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Baseline {
+    tolerance: Tolerance,
+    #[serde(default)]
+    modes: BTreeMap<String, ModeBaseline>,
+    #[serde(default)]
+    timings: TimingBaseline,
+    #[serde(default)]
+    scale: ScaleBaseline,
+}
+
+/// How far a result may fall behind its baseline.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Tolerance {
+    /// The largest drop of recall@5, recall@10 or MRR (absolute, 0-1).
+    quality: f64,
+    /// A latency or time may grow to this many times its baseline...
+    latency: f64,
+    /// ...or by this many milliseconds, whichever is larger (timer noise on tiny values).
+    latency_floor_ms: f64,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModeBaseline {
+    recall_at_5: Option<f64>,
+    recall_at_10: Option<f64>,
+    mrr: Option<f64>,
+    p95_ms: Option<f64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TimingBaseline {
+    full_build_ms: Option<f64>,
+    reload_ms: Option<f64>,
+    cold_start_ms: Option<f64>,
+}
+
+/// The synthetic scale run's figures (`--synthetic`), p95 where a latency.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScaleBaseline {
+    build_ms: Option<f64>,
+    exact_p95_ms: Option<f64>,
+    bm25_p95_ms: Option<f64>,
+    vec_p95_ms: Option<f64>,
+}
+
+impl Baseline {
+    fn read(path: &Path) -> Result<Self> {
+        let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+    }
+
+    /// Every result that fell behind its baseline by more than the tolerance.
+    fn regressions(&self, report: &Report) -> Vec<String> {
+        let mut out = Vec::new();
+        let quality = |out: &mut Vec<String>, what: String, got: f64, want: Option<f64>| {
+            if let Some(want) = want
+                && got < want - self.tolerance.quality
+            {
+                out.push(format!(
+                    "{what} {got:.3} < baseline {want:.3} - {}",
+                    self.tolerance.quality
+                ));
+            }
+        };
+        let time = |out: &mut Vec<String>, what: String, got: f64, want: Option<f64>| {
+            if let Some(want) = want {
+                let limit = (want * self.tolerance.latency).max(want + self.tolerance.latency_floor_ms);
+                if got > limit {
+                    out.push(format!(
+                        "{what} {got:.3} ms > {limit:.3} ms (baseline {want:.3} ms)"
+                    ));
+                }
+            }
+        };
+        for (name, want) in &self.modes {
+            let Some(got) = report.modes.iter().find(|m| &m.mode == name) else {
+                out.push(format!("mode {name} was not measured"));
+                continue;
+            };
+            quality(
+                &mut out,
+                format!("{name} recall@5"),
+                got.recall_at_5,
+                want.recall_at_5,
+            );
+            quality(
+                &mut out,
+                format!("{name} recall@10"),
+                got.recall_at_10,
+                want.recall_at_10,
+            );
+            quality(&mut out, format!("{name} MRR"), got.mrr, want.mrr);
+            time(&mut out, format!("{name} p95"), got.p95_ms, want.p95_ms);
+        }
+        let timings = &self.timings;
+        time(
+            &mut out,
+            "full build".into(),
+            report.full_build_ms,
+            timings.full_build_ms,
+        );
+        time(&mut out, "reload".into(), report.reload_ms, timings.reload_ms);
+        time(
+            &mut out,
+            "cold start".into(),
+            report.cold_start_ms,
+            timings.cold_start_ms,
+        );
+        let scale = &self.scale;
+        let wants_scale = scale.build_ms.is_some()
+            || scale.exact_p95_ms.is_some()
+            || scale.bm25_p95_ms.is_some()
+            || scale.vec_p95_ms.is_some();
+        match &report.scale {
+            Some(got) => {
+                time(&mut out, "scale build".into(), got.build_ms, scale.build_ms);
+                time(
+                    &mut out,
+                    "scale exact p95".into(),
+                    got.exact_ms.1,
+                    scale.exact_p95_ms,
+                );
+                time(
+                    &mut out,
+                    "scale bm25 p95".into(),
+                    got.bm25_ms.1,
+                    scale.bm25_p95_ms,
+                );
+                time(&mut out, "scale vec p95".into(), got.vec_ms.1, scale.vec_p95_ms);
+            }
+            None if wants_scale => out.push("the scale run was not measured (--synthetic)".into()),
+            None => {}
+        }
+        out
+    }
 }
 
 fn measure(args: &BenchArgs) -> Result<Report> {
@@ -823,12 +1016,19 @@ fn measure(args: &BenchArgs) -> Result<Report> {
             .ok_or_else(|| anyhow!("no policy"))?,
     )?
     .to_owned();
-    let directory = kiwi_policy::Directory::parse(std::str::from_utf8(
+    let principals_text = std::str::from_utf8(
         snapshot_for_gate
             .file(&config.governance.principals)
             .ok_or_else(|| anyhow!("no principal directory"))?,
-    )?)?;
-    let gate = PolicyGate::new(&policy, directory)?;
+    )?
+    .to_owned();
+    let new_gate = || -> Result<PolicyGate> {
+        Ok(PolicyGate::new(
+            &policy,
+            kiwi_policy::Directory::parse(&principals_text)?,
+        )?)
+    };
+    let gate = new_gate()?;
     let indexers: Vec<&dyn kiwi_core::plugin::Indexer> = loaded.indexers.iter().map(|i| i.as_ref()).collect();
     let plugin_gate =
         |name: &str, caps: &kiwi_core::plugin::Capabilities, chain: &[kiwi_core::model::AccessDecl]| {
@@ -973,6 +1173,14 @@ fn measure(args: &BenchArgs) -> Result<Report> {
     } else {
         None
     };
+    let reload_ms = measure_reload(
+        &corpus,
+        &pack_path,
+        &config,
+        &all,
+        &new_gate,
+        args.repeat.clamp(3, 20),
+    )?;
     let scale = match args.synthetic {
         Some(n) => Some(scale_run(n, args.repeat, args.keep_synthetic.as_deref())?),
         None => None,
@@ -989,12 +1197,56 @@ fn measure(args: &BenchArgs) -> Result<Report> {
         full_build_ms,
         incremental_build_ms,
         incremental_atoms: incremental.atoms_rebuilt,
+        pack_bytes: std::fs::metadata(&pack_path)?.len(),
+        reload_ms,
         noop_build_ms,
         noop_atoms: noop.atoms_rebuilt,
         query_embed_ms,
         first_vector_query_ms,
         scale,
     })
+}
+
+/// What a server does when a new pack becomes current (`kiwi serve --follow`, or a
+/// `--watch` rebuild): parse the snapshot's policy and principals, open the pack with
+/// its retrievers and swap it in. Median ms of `runs` reloads of a served corpus.
+fn measure_reload(
+    corpus: &Path,
+    pack_path: &Path,
+    config: &kiwi_compiler::KiwiConfig,
+    factories: &[Arc<dyn RetrieverFactory>],
+    new_gate: &dyn Fn() -> Result<PolicyGate>,
+    runs: usize,
+) -> Result<f64> {
+    let state = tempfile::tempdir()?;
+    let options = kiwi_mcp::ServiceOptions {
+        corpus: corpus.to_owned(),
+        packs: corpus.join(PACK_DIR),
+        state_dir: state.path().to_owned(),
+        config: config.clone(),
+        audit: false,
+        proposals: false,
+        stdout_is_protocol: false,
+        snapshot: None,
+    };
+    let served = kiwi_mcp::Corpus::open(
+        options,
+        new_gate()?,
+        kiwi_mcp::CorpusPlugins {
+            factories: factories.to_vec(),
+            reranker: None,
+        },
+    )
+    .map_err(|e| anyhow!(e))?;
+    let mut samples = Vec::with_capacity(runs);
+    for _ in 0..runs {
+        let start = Instant::now();
+        served
+            .replace(pack_path, new_gate()?, config.clone(), factories.to_vec())
+            .map_err(|e| anyhow!(e))?;
+        samples.push(ms(start));
+    }
+    Ok(percentile(&mut samples, 50.0))
 }
 
 fn measure_query_embedding(engine: &Engine, questions: &[Question]) -> Result<f64> {
@@ -1024,19 +1276,31 @@ fn print_report(report: &Report) {
     );
     println!();
     println!(
-        "{:<12} {:>9} {:>9} {:>7} {:>10} {:>10} {:>9} {:>9} {:>6}",
-        "mode", "recall@5", "doc r@5", "mrr", "tokens/q", "discovery", "p50 ms", "p99 ms", "leaks"
+        "{:<16} {:>8} {:>8} {:>8} {:>6} {:>9} {:>9} {:>8} {:>8} {:>8} {:>5}",
+        "mode",
+        "recall@5",
+        "r@10",
+        "doc r@5",
+        "mrr",
+        "tokens/q",
+        "discovery",
+        "p50 ms",
+        "p95 ms",
+        "p99 ms",
+        "leaks"
     );
     for m in &report.modes {
         println!(
-            "{:<12} {:>9.3} {:>9.3} {:>7.3} {:>10.0} {:>10.0} {:>9.3} {:>9.3} {:>6}",
+            "{:<16} {:>8.3} {:>8.3} {:>8.3} {:>6.3} {:>9.0} {:>9.0} {:>8.3} {:>8.3} {:>8.3} {:>5}",
             m.mode,
             m.recall_at_5,
+            m.recall_at_10,
             m.doc_recall_at_5,
             m.mrr,
             m.mean_tokens,
             m.discovery_tokens,
             m.p50_ms,
+            m.p95_ms,
             m.p99_ms,
             m.leaks
         );
@@ -1059,6 +1323,11 @@ fn print_report(report: &Report) {
     println!(
         "cold start (open pack + retrievers + first search by id): {:.2} ms",
         report.cold_start_ms
+    );
+    println!(
+        "reload (policy + pack + retrievers, swapped in): {:.2} ms; pack {:.2} MB",
+        report.reload_ms,
+        report.pack_bytes as f64 / 1e6
     );
     if let Some(first) = report.first_vector_query_ms {
         println!("first query that needs vectors (includes loading the model): {first:.0} ms");
@@ -1085,28 +1354,28 @@ fn print_report(report: &Report) {
         );
         println!("  cold start          {:.2} ms", s.cold_start_ms);
         println!(
-            "  exact (id)          p50 {:.3} ms  p99 {:.3} ms",
-            s.exact_ms.0, s.exact_ms.1
+            "  exact (id)          p50 {:.3}  p95 {:.3}  p99 {:.3} ms",
+            s.exact_ms.0, s.exact_ms.1, s.exact_ms.2
         );
         println!(
-            "  structural filter   p50 {:.3} ms  p99 {:.3} ms",
-            s.structural_ms.0, s.structural_ms.1
+            "  structural filter   p50 {:.3}  p95 {:.3}  p99 {:.3} ms",
+            s.structural_ms.0, s.structural_ms.1, s.structural_ms.2
         );
         println!(
-            "  bm25 retriever      p50 {:.3} ms  p99 {:.3} ms",
-            s.bm25_retriever_ms.0, s.bm25_retriever_ms.1
+            "  bm25 retriever      p50 {:.3}  p95 {:.3}  p99 {:.3} ms",
+            s.bm25_retriever_ms.0, s.bm25_retriever_ms.1, s.bm25_retriever_ms.2
         );
         println!(
-            "  bm25 search         p50 {:.3} ms  p99 {:.3} ms",
-            s.bm25_ms.0, s.bm25_ms.1
+            "  bm25 search         p50 {:.3}  p95 {:.3}  p99 {:.3} ms",
+            s.bm25_ms.0, s.bm25_ms.1, s.bm25_ms.2
         );
         println!(
-            "  hamming scan        p50 {:.3} ms  p99 {:.3} ms",
-            s.vec_scan_ms.0, s.vec_scan_ms.1
+            "  hamming scan        p50 {:.3}  p95 {:.3}  p99 {:.3} ms",
+            s.vec_scan_ms.0, s.vec_scan_ms.1, s.vec_scan_ms.2
         );
         println!(
-            "  vec search (hash)   p50 {:.3} ms  p99 {:.3} ms",
-            s.vec_ms.0, s.vec_ms.1
+            "  vec search (hash)   p50 {:.3}  p95 {:.3}  p99 {:.3} ms",
+            s.vec_ms.0, s.vec_ms.1, s.vec_ms.2
         );
     }
 }
@@ -1295,14 +1564,18 @@ mod scale {
         if d.is_multiple_of(10) { (d + 1) % docs } else { d }
     }
 
-    fn timed(repeat: usize, mut f: impl FnMut() -> Result<()>) -> Result<(f64, f64)> {
+    fn timed(repeat: usize, mut f: impl FnMut() -> Result<()>) -> Result<(f64, f64, f64)> {
         let mut samples = Vec::with_capacity(repeat);
         for _ in 0..repeat {
             let start = Instant::now();
             f()?;
             samples.push(ms(start));
         }
-        Ok((percentile(&mut samples, 50.0), percentile(&mut samples, 99.0)))
+        Ok((
+            percentile(&mut samples, 50.0),
+            percentile(&mut samples, 95.0),
+            percentile(&mut samples, 99.0),
+        ))
     }
 
     pub(super) fn run(atoms: usize, repeat: usize, keep: Option<&Path>) -> Result<ScaleReport> {
@@ -1486,5 +1759,96 @@ mod scale {
             vec_scan_ms,
             vec_ms,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    fn mode(name: &str, recall: f64, mrr: f64, p95_ms: f64) -> ModeResult {
+        ModeResult {
+            mode: name.into(),
+            recall_at_5: recall,
+            recall_at_10: recall,
+            doc_recall_at_5: recall,
+            mrr,
+            discovery_tokens: 0.0,
+            mean_tokens: 0.0,
+            p50_ms: p95_ms,
+            p95_ms,
+            p99_ms: p95_ms,
+            leaks: 0,
+            misses: Vec::new(),
+        }
+    }
+
+    fn report(modes: Vec<ModeResult>, reload_ms: f64) -> Report {
+        Report {
+            snapshot: "dir:test".into(),
+            atoms: 1,
+            questions: 1,
+            modes,
+            leak_checks: 0,
+            leak_violations: Vec::new(),
+            missing_visibility: Vec::new(),
+            cold_start_ms: 1.0,
+            full_build_ms: 100.0,
+            incremental_build_ms: 1.0,
+            incremental_atoms: 1,
+            pack_bytes: 1,
+            reload_ms,
+            noop_build_ms: 1.0,
+            noop_atoms: 0,
+            query_embed_ms: None,
+            first_vector_query_ms: None,
+            scale: None,
+        }
+    }
+
+    const BASELINE: &str = r#"
+[tolerance]
+quality = 0.02
+latency = 3.0
+latency_floor_ms = 1.0
+
+[modes.bm25]
+recall_at_5 = 0.80
+mrr = 0.70
+p95_ms = 0.1
+
+[timings]
+reload_ms = 10.0
+"#;
+
+    #[test]
+    fn results_within_tolerance_pass() {
+        let baseline: Baseline = toml::from_str(BASELINE).unwrap();
+        // Quality 0.015 below, latency under the 1 ms floor, reload under 3x.
+        let ok = report(vec![mode("bm25", 0.785, 0.70, 1.05)], 29.0);
+        assert!(
+            baseline.regressions(&ok).is_empty(),
+            "{:?}",
+            baseline.regressions(&ok)
+        );
+    }
+
+    #[test]
+    fn regressions_beyond_tolerance_are_named() {
+        let baseline: Baseline = toml::from_str(BASELINE).unwrap();
+        let worse = report(vec![mode("bm25", 0.77, 0.60, 1.2)], 31.0);
+        let found = baseline.regressions(&worse);
+        assert_eq!(found.len(), 4, "{found:?}");
+        assert!(found[0].starts_with("bm25 recall@5"), "{found:?}");
+        assert!(found.iter().any(|r| r.starts_with("reload")), "{found:?}");
+        let missing = report(Vec::new(), 1.0);
+        assert_eq!(baseline.regressions(&missing), ["mode bm25 was not measured"]);
+    }
+
+    #[test]
+    fn unknown_baseline_keys_are_errors() {
+        assert!(toml::from_str::<Baseline>(&BASELINE.replace("mrr = 0.70", "mmr = 0.70")).is_err());
     }
 }

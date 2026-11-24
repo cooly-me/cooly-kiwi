@@ -1,32 +1,40 @@
-//! `kiwi bench` is a quick tool: on the example corpus (BM25, vectors with the hash
-//! embedder, the leak suite) it finishes well within a minute, finds no leak and keeps
-//! its recall.
+//! `kiwi bench` on the example corpus (BM25, vectors with the hash embedder, the leak
+//! suite): it finds no leak, and a baseline it falls behind fails the run.
 
 #![cfg(all(feature = "bm25", feature = "vec"))]
 #![allow(clippy::unwrap_used)]
 
 mod common;
 
-use std::time::{Duration, Instant};
-
 use serde_json::Value;
 
-/// The bench's time budget on the example corpus (a debug build on a loaded laptop
-/// stays well inside it).
-const BUDGET: Duration = Duration::from_secs(60);
-
 #[test]
-fn the_bench_is_quick_and_finds_no_leak() {
+fn the_bench_finds_no_leak_and_fails_below_its_baseline() {
     let root = common::workspace();
-    let started = Instant::now();
+    let dir = tempfile::tempdir().unwrap();
+    // Recall above 1 cannot be met: the run must report the regression and fail.
+    let baseline = dir.path().join("baseline.toml");
+    std::fs::write(
+        &baseline,
+        "[tolerance]\nquality = 0.0\nlatency = 1000.0\nlatency_floor_ms = 1000.0\n\n[modes.bm25]\nrecall_at_5 = 1.01\n",
+    )
+    .unwrap();
     let out = std::process::Command::new(common::KIWI)
-        .args(["bench", "fixtures/acme-kb", "--embedder", "hash", "--json"])
+        .args([
+            "bench",
+            "fixtures/acme-kb",
+            "--embedder",
+            "hash",
+            "--json",
+            "--baseline",
+        ])
+        .arg(&baseline)
         .current_dir(&root)
         .output()
         .unwrap();
-    let took = started.elapsed();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    assert!(took < BUDGET, "kiwi bench took {took:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("regression: bm25 recall@5"), "{stderr}");
     let report: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert!(report["leak_checks"].as_u64().unwrap() > 100, "{report}");
     assert!(
@@ -37,12 +45,10 @@ fn the_bench_is_quick_and_finds_no_leak() {
         report["missing_visibility"].as_array().unwrap().is_empty(),
         "{report}"
     );
-    let bm25 = report["modes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|m| m["mode"] == "bm25")
-        .unwrap();
-    assert_eq!(bm25["leaks"], 0);
-    assert!(bm25["recall_at_5"].as_f64().unwrap() >= 0.8, "{bm25}");
+    for mode in report["modes"].as_array().unwrap() {
+        if mode["mode"] != "grep+read" {
+            assert_eq!(mode["leaks"], 0, "{mode}");
+        }
+    }
+    assert!(report["reload_ms"].as_f64().unwrap() > 0.0, "{report}");
 }

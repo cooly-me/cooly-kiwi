@@ -1,0 +1,39 @@
+name: bench
+
+# The benchmark suite (bench/run.sh): quality, latency, build, reload and scale against
+# bench/baselines/, on every release, nightly and by hand; never on pull requests.
+on:
+  release:
+    types: [published]
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bench
+  cancel-in-progress: false
+
+jobs:
+  bench:
+    # Runs once the repository is public, where hosted runners are free.
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: bench
+      - run: cargo build --release --no-default-features --features bm25,vec,openai,rerank,wasm,http
+      - run: bench/run.sh --out target/bench
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-${{ github.sha }}
+          path: target/bench/*.json
