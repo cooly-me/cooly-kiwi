@@ -2,6 +2,7 @@
 //! the audit log.
 
 mod bench;
+mod follow;
 mod identity;
 mod plugins;
 
@@ -238,7 +239,8 @@ struct ServeArgs {
     /// Serve the pack of this Git revision (one corpus only).
     #[arg(long)]
     rev: Option<String>,
-    /// Pack directory (one corpus only; default <corpus>/.kiwi/packs).
+    /// Pack directory (default <corpus>/.kiwi/packs; with several corpora,
+    /// <packs>/<namespace>).
     #[arg(long)]
     packs: Option<PathBuf>,
     #[command(flatten)]
@@ -264,6 +266,12 @@ struct ServeArgs {
     /// not with --rev).
     #[arg(long, conflicts_with = "rev")]
     watch: bool,
+    /// Serve the pack each store's CURRENT names, and every pack another process
+    /// (`kiwi build`) makes current later, with the policy, principals and
+    /// configuration of its snapshot. The stores are watched, re-read every 30 seconds
+    /// and on SIGHUP; calls in flight finish on the pack they started with.
+    #[arg(long, conflicts_with_all = ["watch", "rev"])]
+    follow: bool,
     /// HTTP: name of the environment variable holding the HS256 token secret.
     #[arg(long)]
     auth_hs256_env: Option<String>,
@@ -569,21 +577,63 @@ fn cmd_query(source: &SourceArgs, tool: &str, args: &str, principal: &str, agent
 }
 
 impl ServeArgs {
-    fn sources(&self) -> Result<Vec<SourceArgs>> {
-        if self.corpora.len() > 1 && (self.rev.is_some() || self.packs.is_some()) {
-            bail!("--rev and --packs apply to one corpus; serve several from their current packs");
+    /// The corpora to serve. With several, `--state` and `--packs` name parent
+    /// directories holding one directory per namespace.
+    fn sources(&self) -> Result<Vec<(SourceArgs, PathBuf)>> {
+        let several = self.corpora.len() > 1;
+        if several && self.rev.is_some() {
+            bail!("--rev applies to one corpus; serve several from their current packs");
         }
-        Ok(self
-            .corpora
-            .iter()
-            .map(|corpus| SourceArgs {
+        let mut sources = Vec::with_capacity(self.corpora.len());
+        for corpus in &self.corpora {
+            let mut source = SourceArgs {
                 corpus: corpus.clone(),
                 worktree: self.worktree,
                 rev: self.rev.clone(),
                 packs: self.packs.clone(),
-            })
-            .collect())
+            };
+            let namespace = if several && (self.state.is_some() || self.packs.is_some()) {
+                Some(namespace_of(&source)?)
+            } else {
+                None
+            };
+            if let (Some(dir), Some(namespace)) = (&self.packs, &namespace) {
+                source.packs = Some(dir.join(namespace));
+            }
+            let state = match (&self.state, &namespace) {
+                (Some(dir), Some(namespace)) => dir.join(namespace),
+                (Some(dir), None) => dir.clone(),
+                (None, _) => corpus.join(".kiwi/state"),
+            };
+            sources.push((source, state));
+        }
+        Ok(sources)
     }
+}
+
+/// The namespace a corpus's configuration declares.
+fn namespace_of(source: &SourceArgs) -> Result<String> {
+    let config = load_config(&source::read_paths(
+        &source.corpus,
+        &source.mode(),
+        &[kiwi_compiler::config::CONFIG_PATH],
+    )?)?;
+    Ok(config.namespace)
+}
+
+/// With `--follow`, the source a corpus opens on: the commit of the pack its store's
+/// CURRENT names, so the server starts on what the builder last made current.
+fn current_commit(source: &SourceArgs) -> Result<SourceArgs> {
+    let mut opened = source.clone();
+    if let Some(path) = PackStore::new(source.packs()).current()?
+        && source::uses_git(&source.corpus, &source.mode())
+    {
+        let pack = Pack::open(&path).with_context(|| format!("opening {}", path.display()))?;
+        if !pack.snapshot().starts_with("dir:") {
+            opened.rev = Some(pack.snapshot().to_owned());
+        }
+    }
+    Ok(opened)
 }
 
 fn cmd_serve(args: ServeArgs) -> Result<()> {
@@ -596,27 +646,24 @@ fn cmd_serve(args: ServeArgs) -> Result<()> {
     let sources = args.sources()?;
     let stdio = args.http.is_none();
     let mut corpora = Vec::with_capacity(sources.len());
-    for source in &sources {
-        let state = match (&args.state, sources.len()) {
-            (Some(dir), 1) => dir.clone(),
-            (Some(dir), _) => {
-                let config = load_config(&source::read_paths(
-                    &source.corpus,
-                    &source.mode(),
-                    &[kiwi_compiler::config::CONFIG_PATH],
-                )?)?;
-                dir.join(&config.namespace)
-            }
-            (None, _) => source.corpus.join(".kiwi/state"),
+    for (source, state) in &sources {
+        let opened = if args.follow {
+            current_commit(source)?
+        } else {
+            source.clone()
         };
-        corpora.push(open_corpus(source, state, !args.no_audit, stdio)?);
+        corpora.push(open_corpus(&opened, state.clone(), !args.no_audit, stdio)?);
     }
+    let sources: Vec<SourceArgs> = sources.into_iter().map(|(source, _)| source).collect();
     let service = Arc::new(KiwiService::federate(corpora)?);
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     if args.watch {
         for (index, source) in sources.iter().enumerate() {
             spawn_watcher(source, &args.plugins, Arc::clone(&service), index)?;
         }
+    }
+    if args.follow {
+        follow::spawn(&sources, Arc::clone(&service), &runtime)?;
     }
     // Watchers keep their own handles on the service, so its sinks are stopped here
     // rather than when the last handle drops.

@@ -188,8 +188,10 @@ impl BuildSession {
 }
 
 /// Compiles one document through the compile cache in `cache_dir`: a cached result is
-/// reused, a new one is stored. Returns the document, its cache key and whether it was
-/// compiled now.
+/// reused, a new one is stored. The cache only saves work: where it cannot be written (a
+/// server that only reads its pack store, as with `kiwi serve --follow`), documents are
+/// compiled every time. Returns the document, its cache key and whether it was compiled
+/// now.
 pub fn compile_cached(
     file: &str,
     bytes: &[u8],
@@ -213,7 +215,8 @@ pub fn compile_cached(
     let doc = compile::compile_doc(file, text, defaults, config)?;
     let encoded = rkyv::to_bytes::<rkyv::rancor::Error>(&doc)
         .map_err(|e| CompileError::Config(format!("cache: {e}")))?;
-    replace_file(&cache_file, &encoded)?;
+    // A cache entry that cannot be written costs only the next compile of this file.
+    let _ = replace_file(&cache_file, &encoded);
     Ok((doc, key, true))
 }
 
@@ -226,7 +229,8 @@ pub fn compile_docs(
     owners: &KiwiOwners,
     cache_dir: &Path,
 ) -> Result<Vec<(CompiledDoc, String, bool)>> {
-    std::fs::create_dir_all(cache_dir).map_err(|e| CompileError::source(cache_dir, e))?;
+    // Without a writable cache every document is compiled (see `compile_cached`).
+    let _ = std::fs::create_dir_all(cache_dir);
     let files: Vec<(&String, &Vec<u8>)> = snapshot.markdown().collect();
     files
         .par_iter()
@@ -452,6 +456,20 @@ mod tests {
                          finance/  access=finance  owner=cfo@example.com\n\
                          notes/  owner=@notes\n\
                          notes/loose.md  owner=@last\n";
+
+    #[test]
+    fn documents_compile_where_the_cache_cannot_be_written() {
+        let dir = tempfile::tempdir().unwrap();
+        // A file where the cache directory should be: nothing can be created in it.
+        let blocked = dir.path().join("cache");
+        std::fs::write(&blocked, b"").unwrap();
+        let snapshot = corpus(ACCESS);
+        let config = load_config(&snapshot).unwrap();
+        let owners = load_owners(&snapshot).unwrap();
+        let compiled = compile_docs(&snapshot, &config, &owners, &blocked.join("docs")).unwrap();
+        assert_eq!(compiled.len(), 4);
+        assert!(compiled.iter().all(|(_, _, fresh)| *fresh));
+    }
 
     #[test]
     fn kiwiowners_supplies_the_owner_and_frontmatter_overrides_it() {

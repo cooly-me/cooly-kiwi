@@ -291,3 +291,76 @@ fn a_reload_swaps_pack_policy_and_configuration_together() {
     assert_eq!(corpus_state.engine().pack().snapshot(), snapshot);
     let _ = Pack::open(&pack).unwrap();
 }
+
+/// Calls racing a stream of reloads each answer whole from one snapshot: the pack's
+/// text and the snapshot it names always agree, and no call fails.
+#[test]
+fn calls_racing_reloads_answer_from_one_snapshot() {
+    let corpus = Corpus::copy();
+    let notes = corpus.root.join("notes.md");
+    std::fs::write(&notes, "# Notes\n\nThe Alderwick line.\n").unwrap();
+    let first = build(&corpus.root);
+    let first_pack = PackStore::new(corpus.root.join(PACK_DIR))
+        .current()
+        .unwrap()
+        .unwrap();
+    std::fs::write(&notes, "# Notes\n\nThe Brindlemoor line.\n").unwrap();
+    let second = build(&corpus.root);
+    let second_pack = PackStore::new(corpus.root.join(PACK_DIR))
+        .current()
+        .unwrap()
+        .unwrap();
+    let service = Arc::new(service(&corpus.root));
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let callers: Vec<_> = (0..4)
+        .map(|_| {
+            let service = Arc::clone(&service);
+            let stop = Arc::clone(&stop);
+            let (first, second) = (first.clone(), second.clone());
+            std::thread::spawn(move || {
+                let alice = Identity::new("alice", "claude-code", "stdio");
+                let mut seen = std::collections::BTreeSet::new();
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    let text = service
+                        .call(&alice, "kiwi_read", json!({"ids": ["notes"]}))
+                        .unwrap();
+                    let read: Value = serde_json::from_str(&text).unwrap();
+                    let snapshot = read["snapshot"].as_str().unwrap().to_owned();
+                    let body = read["atoms"][0]["text"].as_str().unwrap();
+                    let expected = if snapshot == first {
+                        "Alderwick"
+                    } else {
+                        assert_eq!(snapshot, second);
+                        "Brindlemoor"
+                    };
+                    assert!(body.contains(expected), "{snapshot}: {body}");
+                    let search = service
+                        .call(
+                            &alice,
+                            "kiwi_search",
+                            json!({"queries": ["Alderwick Brindlemoor"]}),
+                        )
+                        .unwrap();
+                    let search: Value = serde_json::from_str(&search).unwrap();
+                    assert!(search["snapshot"] == first.as_str() || search["snapshot"] == second.as_str());
+                    seen.insert(snapshot);
+                }
+                seen
+            })
+        })
+        .collect();
+    let corpus_state = &service.corpora()[0];
+    for round in 0..200 {
+        let pack = if round % 2 == 0 { &first_pack } else { &second_pack };
+        corpus_state
+            .replace(pack, gate(&corpus.root), config(&corpus.root), factories())
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let mut seen = std::collections::BTreeSet::new();
+    for caller in callers {
+        seen.extend(caller.join().unwrap());
+    }
+    assert_eq!(seen.len(), 2, "both snapshots were served: {seen:?}");
+}
