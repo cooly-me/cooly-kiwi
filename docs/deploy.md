@@ -198,7 +198,10 @@ kiwi serve /srv/kb /srv/catalogue --follow \
   --packs /var/lib/kiwi/packs --state /var/lib/kiwi/state …
 ```
 
-Each store is followed on its own, so each corpus is rebuilt on its own schedule.
+Each store is followed on its own, so each corpus is rebuilt on its own schedule. When a
+single-corpus server becomes a federated one, its state moves too: stop it and move
+the files of `/var/lib/kiwi/state` into `/var/lib/kiwi/state/kb` before starting it
+with both corpora, so the audit chain continues.
 Ids in answers are qualified (`catalogue:items/svc-00123`), and a search can stay in
 one corpus with `"filters": {"namespace": ["catalogue"]}`. A generated corpus commits
 what it generates (`git add -A && git commit`) before its build, since builds read
