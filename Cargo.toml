@@ -1,0 +1,87 @@
+[workspace]
+resolver = "3"
+exclude = ["plugins"]
+members = [
+    "crates/kiwi-core",
+    "crates/kiwi-compiler",
+    "crates/kiwi-policy",
+    "crates/kiwi-mcp",
+    "crates/kiwi-bm25",
+    "crates/kiwi-vec",
+    "crates/kiwi-rerank",
+    "crates/kiwi-http",
+    "crates/kiwi-wasm",
+    "crates/kiwi-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "Apache-2.0"
+repository = "https://github.com/justvinhhere/cooly-kiwi"
+authors = ["The Kiwi authors"]
+keywords = ["mcp", "knowledge-base", "agents", "markdown", "governance"]
+
+[workspace.dependencies]
+kiwi-core = { path = "crates/kiwi-core", version = "0.1.0" }
+kiwi-compiler = { path = "crates/kiwi-compiler", version = "0.1.0" }
+kiwi-policy = { path = "crates/kiwi-policy", version = "0.1.0" }
+kiwi-mcp = { path = "crates/kiwi-mcp", version = "0.1.0", default-features = false }
+kiwi-bm25 = { path = "crates/kiwi-bm25", version = "0.1.0" }
+kiwi-vec = { path = "crates/kiwi-vec", version = "0.1.0", default-features = false }
+kiwi-wasm = { path = "crates/kiwi-wasm", version = "0.1.0" }
+kiwi-rerank = { path = "crates/kiwi-rerank", version = "0.1.0", default-features = false }
+kiwi-http = { path = "crates/kiwi-http", version = "0.1.0" }
+
+anyhow = "=1.0.105"
+axum = "=0.8.9"
+blake3 = { version = "=1.8.7", features = ["rayon"] }
+cedar-policy = "=4.15.0"
+clap = { version = "=4.6.9", features = ["derive", "env"] }
+fastembed = { version = "=7.8.0", default-features = false, features = ["onig", "hf-hub-rustls-tls", "ort-download-binaries-rustls-tls"] }
+frostem = { version = "=1.20260821.8", default-features = false, features = ["english"] }
+fst = "=0.4.7"
+gix = { version = "=0.91.0", default-features = false }
+getrandom = "=0.3.4"
+globset = "=0.4.22"
+hex = "=0.4.3"
+http = "=1.5.0"
+jsonwebtoken = { version = "=12.0.0", default-features = false, features = ["use_pem", "rust_crypto"] }
+memmap2 = "=0.9.12"
+notify = "=9.0.0"
+rayon = "=1.12.0"
+pulldown-cmark = { version = "=0.13.6", default-features = false }
+regex = "=1.13.2"
+reqwest = { version = "=0.13.5", default-features = false }
+rkyv = { version = "=0.8.18", features = ["unaligned"] }
+rmcp = { version = "=3.11.0" }
+roaring = "=0.12.0"
+schemars = "=1.2.3"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+serde_yaml_ng = "=0.10.0"
+stable_deref_trait = "=1.2.1"
+tempfile = "=3.27.0"
+thiserror = "=2.0.21"
+tiktoken-rs = "=0.12.1"
+tokio = { version = "=1.54.1", features = ["rt-multi-thread", "macros", "io-std", "sync", "time", "signal", "process"] }
+toml = "=1.2.2"
+tracing = "=0.1.44"
+unicode-normalization = "=0.1.26"
+ureq = { version = "=3.5.2", default-features = false, features = ["rustls"] }
+wasmtime = { version = "=48.0.0", default-features = false, features = ["runtime", "cranelift", "component-model", "std"] }
+wit-component = "=0.254.2"
+zstd = "=0.14.4"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+dbg_macro = "deny"
+
+[profile.release]
+lto = "thin"
+codegen-units = 4

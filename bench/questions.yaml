@@ -1,0 +1,302 @@
+# Kiwi-Bench questions for fixtures/acme-kb.
+questions:
+  # Conceptual questions, phrased without the documents' exact words.
+  - id: q01
+    question: "How does checkout avoid charging a buyer twice?"
+    # What an agent would pass to kiwi_search: 1-3 short keyword queries it writes itself
+    # (keywords, synonyms, or a one-line hypothetical answer). No question words.
+    queries: ["double charge prevention idempotency", "idempotency key checkout retry"]
+    principal: alice
+    answers: ["adr/adr-005-idempotency-keys#decision", "product/checkout/prd#failure-handling"]
+
+  - id: q02
+    question: "What happens if the card charge fails after the buyer has already seen the order confirmation?"
+    queries: ["capture failure after order confirmed", "saga compensation cancel orders release inventory"]
+    principal: alice
+    answers: ["rfcs/rfc-010-checkout-saga#compensation", "adr/adr-007-async-capture#consequences"]
+
+  - id: q03
+    question: "Why is one service not allowed to query another team's tables directly?"
+    queries: ["database per service no shared database", "services own data cross-service access API events"]
+    principal: alice
+    answers: ["adr/adr-001-postgres#decision", "adr/adr-001-postgres#consequences"]
+
+  - id: q04
+    question: "Why do we keep prices as whole numbers rather than decimals?"
+    queries: ["money integer minor units", "floating point rounding cents payouts"]
+    principal: alice
+    answers: ["adr/adr-006-integer-money#context", "adr/adr-006-integer-money#decision"]
+
+  - id: q05
+    question: "How soon after a seller edits an item can buyers find the change?"
+    queries: ["index freshness listing change searchable", "search update latency seller edit 60 seconds"]
+    principal: priya
+    answers: ["product/search/prd#goals", "rfcs/rfc-011-search-indexing#freshness"]
+
+  - id: q06
+    question: "What happens when a seller's bank bounces the transfer we send them?"
+    queries: ["payout rejected by bank returned to balance", "reversing entry in_transit available rejected payout"]
+    principal: alice
+    answers: ["product/payouts/prd#payout-schedule", "rfcs/rfc-013-payout-ledger#payout-run"]
+
+  - id: q07
+    question: "Why might money from a brand-new shop wait longer before it reaches the maker?"
+    queries: ["new seller hold first orders", "rolling reserve risk hold payout"]
+    principal: priya
+    answers: ["product/payouts/prd#holds"]
+
+  - id: q08
+    question: "How forgiving is the search box when a buyer fat-fingers a word on their phone?"
+    queries: ["typo tolerance edit distance", "fuzzy matching misspelling did you mean"]
+    principal: alice
+    answers: ["product/search/prd#typo-tolerance"]
+
+  - id: q09
+    question: "For how long is stock set aside for a shopper while they finish paying?"
+    queries: ["inventory reservation 15 minutes", "reserve stock during checkout expiry"]
+    principal: alice
+    answers: ["product/checkout/prd#basket-flow", "rfcs/rfc-010-checkout-saga#timeouts"]
+
+  - id: q10
+    question: "Can someone start selling before their ID has been approved?"
+    queries: ["list before verification payouts blocked", "can list versus can be paid identity check"]
+    principal: priya
+    answers: ["product/sellers/prd#kyc"]
+
+  - id: q11
+    question: "What happens when a phone alert cannot reach the user?"
+    queries: ["push failure fall back to email", "invalid device token circuit breaker push provider"]
+    principal: priya
+    answers: ["rfcs/rfc-014-notification-fanout#email-fallback", "adr/adr-008-push-provider#decision"]
+
+  - id: q12
+    question: "How do we check every day that our money records agree with what actually happened?"
+    queries: ["daily reconciliation ledger processor bank", "ledger invariants sum zero nightly check"]
+    principal: alice
+    answers: ["rfcs/rfc-013-payout-ledger#reconciliation", "rfcs/rfc-013-payout-ledger#internal-reconciliation"]
+
+  - id: q13
+    question: "What targets has leadership set for the next three years?"
+    queries: ["three-year goals GMV active buyers sellers", "2029 targets marketplace growth"]
+    principal: erin
+    answers: ["vision#three-year-goals"]
+
+  - id: q14
+    question: "Which kinds of business has the company ruled out?"
+    queries: ["non-goals will not do", "no warehouses no mass-produced goods no ads"]
+    principal: erin
+    answers: ["vision#non-goals"]
+
+  - id: q15
+    question: "What is the one number the company steers by?"
+    queries: ["north star metric", "sellers earned 500 USD trailing ninety days guardrails"]
+    principal: carl
+    answers: ["vision#measuring-success"]
+
+  # Exact-ID questions.
+  - id: q16
+    question: "What did ADR-006 decide?"
+    queries: ["ADR-006 decision", "money integer minor units currency code"]
+    principal: alice
+    answers: ["adr/adr-006-integer-money#decision"]
+
+  - id: q17
+    question: "What does ADR-008 propose, and is it approved yet?"
+    queries: ["ADR-008 push provider email fallback", "ADR-008 status review"]
+    principal: priya
+    answers: ["adr/adr-008-push-provider", "adr/adr-008-push-provider#decision"]
+
+  - id: q18
+    question: "What are the steps of the saga in RFC-010?"
+    queries: ["RFC-010 saga steps", "reserve inventory authorise payment create orders capture notify"]
+    principal: alice
+    answers: ["rfcs/rfc-010-checkout-saga#saga-steps"]
+
+  - id: q19
+    question: "What are the goals of PRD-003?"
+    queries: ["PRD-003 goals", "seller onboarding goals time to first sale"]
+    principal: priya
+    answers: ["product/sellers/prd#goals"]
+
+  - id: q20
+    question: "Why was ADR-003 deprecated?"
+    queries: ["ADR-003 deprecated superseded", "synchronous capture latency duplicate charges"]
+    principal: alice
+    answers: ["adr/adr-003-sync-capture", "adr/adr-003-sync-capture#consequences"]
+
+  - id: q21
+    question: "How does RFC-011 rebuild the index without downtime?"
+    queries: ["RFC-011 reindexing alias flip", "zero-downtime rebuild new index alias"]
+    principal: alice
+    answers: ["rfcs/rfc-011-search-indexing#reindexing"]
+
+  - id: q22
+    question: "What are the open questions in PRD-001?"
+    queries: ["PRD-001 open questions", "checkout open questions authorisation wait stored cards"]
+    principal: priya
+    answers: ["product/checkout/prd#open-questions"]
+
+  - id: q23
+    question: "Which alternatives did ADR-001 consider?"
+    queries: ["ADR-001 alternatives considered", "MySQL distributed SQL document database rejected"]
+    principal: alice
+    answers: ["adr/adr-001-postgres#alternatives"]
+
+  # Glossary and synonym questions, phrased with an alias rather than the term.
+  - id: q24
+    question: "What is a settlement, and when do sellers receive one?"
+    queries: ["settlement payout definition", "payout schedule daily weekly monthly"]
+    principal: priya
+    answers: ["glossary#payout", "product/payouts/prd#payout-schedule"]
+
+  - id: q25
+    question: "What does know your customer mean on this marketplace?"
+    queries: ["know your customer identity verification", "KYC seller ID selfie sanctions"]
+    principal: carl
+    answers: ["glossary#kyc"]
+
+  - id: q26
+    question: "How long is a dedupe key remembered by the server?"
+    queries: ["dedupe key retention", "idempotency key stored 24 hours replay"]
+    principal: alice
+    answers: ["glossary#idempotency-key", "adr/adr-005-idempotency-keys#decision"]
+
+  - id: q27
+    question: "What is a shopping cart in Acme terms?"
+    queries: ["shopping cart definition", "basket items several sellers"]
+    principal: carl
+    answers: ["glossary#basket"]
+
+  - id: q28
+    question: "When is do not disturb in effect for notifications?"
+    queries: ["do not disturb notifications", "quiet hours 22:00 08:00 local time"]
+    principal: priya
+    answers: ["glossary#quiet-hours", "product/notifications/prd#quiet-hours"]
+
+  - id: q29
+    question: "What counts towards gross merchandise value?"
+    queries: ["gross merchandise value definition", "GMV includes shipping before refunds"]
+    principal: alice
+    answers: ["glossary#gmv"]
+
+  - id: q30
+    question: "How are the books kept for what we owe each maker?"
+    queries: ["books double-entry seller balance", "ledger append-only debit credit"]
+    principal: alice
+    answers: ["glossary#ledger", "product/payouts/prd#ledger-requirements", "rfcs/rfc-013-payout-ledger#summary"]
+
+  - id: q31
+    question: "What is the commission and how is it charged to merchants?"
+    queries: ["commission platform fee definition", "take rate percentage plus fixed per order"]
+    principal: priya
+    answers: ["glossary#take-rate"]
+
+  # Relationship questions.
+  - id: q32
+    question: "Which ADR replaced synchronous capture at checkout?"
+    queries: ["supersedes synchronous capture", "asynchronous capture checkout saga ADR"]
+    principal: alice
+    answers: ["adr/adr-007-async-capture", "adr/adr-003-sync-capture"]
+
+  - id: q33
+    question: "Which RFC implements the seller payouts PRD?"
+    queries: ["implements PRD-004", "payout ledger RFC"]
+    principal: priya
+    answers: ["rfcs/rfc-013-payout-ledger"]
+
+  - id: q34
+    question: "Which decisions does the checkout saga design rest on?"
+    queries: ["RFC-010 decided by", "checkout saga Kafka asynchronous capture ADR"]
+    principal: alice
+    answers: ["rfcs/rfc-010-checkout-saga", "adr/adr-007-async-capture", "adr/adr-002-kafka"]
+
+  - id: q35
+    question: "What does the search indexing pipeline depend on?"
+    queries: ["RFC-011 depends on", "search indexer Kafka OpenSearch dependency"]
+    principal: alice
+    answers: ["rfcs/rfc-011-search-indexing", "adr/adr-002-kafka"]
+
+  - id: q36
+    question: "Which design document implements the notifications requirements?"
+    queries: ["implements PRD-005", "notification fan-out RFC"]
+    principal: priya
+    answers: ["rfcs/rfc-014-notification-fanout"]
+
+  - id: q37
+    question: "Which designs rely on the rule that every write API takes a request key?"
+    queries: ["ADR-005 relied on by", "idempotency rule checkout saga payout ledger"]
+    principal: alice
+    answers: ["adr/adr-005-idempotency-keys", "rfcs/rfc-010-checkout-saga#idempotency"]
+
+  # Rule questions, answered by a standard rather than a decision or a design.
+  - id: q46
+    question: "Who has to sign off before a change to the payouts code can go in?"
+    queries: ["pull request approvals payments code", "code review two reviewers payments team"]
+    principal: alice
+    answers: ["standards/engineering-quality#code-review"]
+
+  - id: q47
+    question: "What does a team have to stop doing once its service has been too unreliable this month?"
+    queries: ["error budget spent feature freeze", "availability objective reliability fixes only"]
+    principal: alice
+    answers: ["standards/engineering-quality#slos"]
+
+  - id: q48
+    question: "How is a new version tried on real traffic before everyone gets it?"
+    queries: ["canary share of traffic automatic rollback", "deployment pipeline canary 30 minutes"]
+    principal: priya
+    answers: ["standards/engineering-quality#releases"]
+
+  # Finance questions that need confidential sections.
+  - id: q38
+    question: "What is our take rate per order, and is an increase planned?"
+    queries: ["take rate percentage per order", "planned fee increase seller notice"]
+    principal: fiona
+    answers: ["product/checkout/prd#pricing"]
+
+  - id: q39
+    question: "What margin do we add when converting currency for seller payouts?"
+    queries: ["FX margin payouts", "payout fees currency conversion mid-market"]
+    principal: fiona
+    answers: ["product/payouts/prd#fee-schedule"]
+
+  - id: q40
+    question: "Which bank holds our settlement cash, and how are its statements matched?"
+    queries: ["partner bank statement file reconciliation", "settlement account minimum balance bank"]
+    principal: fiona
+    answers: ["rfcs/rfc-013-payout-ledger#bank-reconciliation"]
+
+  - id: q41
+    question: "How many engineers do we plan to add next year?"
+    queries: ["2027 headcount plan engineering", "hiring plan payments search platform"]
+    principal: fiona
+    answers: ["finance/budget-2027#headcount-plan"]
+
+  # Questions whose only answers are hidden from the asking principal.
+  - id: q42
+    question: "Which competitor is leadership planning to buy?"
+    queries: ["acquisition target competitor", "acquire small marketplace textiles"]
+    principal: carl
+    answers: ["vision#acquisition-targets"]
+    hidden: true
+
+  - id: q43
+    question: "What percentage does the platform keep from each order, and is it going up?"
+    queries: ["take rate percentage per order", "platform fee increase planned"]
+    principal: alice
+    answers: ["product/checkout/prd#pricing"]
+    hidden: true
+
+  - id: q44
+    question: "How does checkout stop a retried order from charging the card again?"
+    queries: ["idempotency key retry duplicate charge", "double charge prevention checkout"]
+    principal: carl
+    answers: ["adr/adr-005-idempotency-keys#decision", "product/checkout/prd#failure-handling"]
+    hidden: true
+
+  - id: q45
+    question: "How much will we spend on cloud infrastructure next year?"
+    queries: ["2027 infrastructure budget", "cloud spend compute databases OpenSearch cost"]
+    principal: alice
+    answers: ["finance/budget-2027#infrastructure-spend"]
+    hidden: true

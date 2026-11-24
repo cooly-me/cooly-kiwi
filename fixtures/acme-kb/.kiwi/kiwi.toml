@@ -1,0 +1,21 @@
+namespace = "acme"
+
+[atoms]
+min_tokens = 50
+max_tokens = 800
+
+[governance]
+hidden = "invisible"
+bm25_stats = "strict"
+
+[search]
+budget = 800
+limit = 10
+
+[plugins.bm25]
+enabled = true
+
+[plugins.vec]
+enabled = true
+embedder = "fastembed"
+model = "multilingual-e5-small"

@@ -1,0 +1,68 @@
+# Kiwi-Bench principals: who the leak tests act as (over stdio unless `channel` says
+# otherwise), and what each must and must not see.
+# Visibility comes from fixtures/acme-kb/.kiwi/policy.cedar and principals.yaml; these
+# expectations are written by hand so that a policy mistake is caught, not trusted.
+principals:
+  - id: carl          # outside contractor: public only
+    agent: claude-code
+    must_see: [vision, glossary, "glossary#payout"]
+    must_not_see:
+      - "vision#acquisition-targets"
+      - "product/checkout/prd"
+      - "product/checkout/prd#pricing"
+      - "adr/adr-005-idempotency-keys#decision"
+      - "finance/budget-2027"
+      - "legal/dpa-negotiation"
+      - "rfcs/rfc-013-payout-ledger#bank-reconciliation"
+  - id: alice         # engineer
+    agent: claude-code
+    must_see: ["adr/adr-005-idempotency-keys#decision", "product/checkout/prd#failure-handling", "rfcs/rfc-013-payout-ledger#internal-reconciliation"]
+    must_not_see:
+      - "vision#acquisition-targets"
+      - "product/checkout/prd#pricing"
+      - "product/payouts/prd#fee-schedule"
+      - "rfcs/rfc-013-payout-ledger#bank-reconciliation"
+      - "finance/budget-2027"
+      - "finance/budget-2027#infrastructure-spend"
+      - "legal/dpa-negotiation"
+  - id: priya         # product manager
+    agent: cursor
+    must_see: ["product/search/prd", "rfcs/rfc-010-checkout-saga"]
+    must_not_see:
+      - "vision#acquisition-targets"
+      - "product/checkout/prd#pricing"
+      - "finance/budget-2027"
+      - "legal/dpa-negotiation"
+  - id: fiona         # finance
+    agent: claude-code
+    must_see: ["product/checkout/prd#pricing", "product/payouts/prd#fee-schedule", "rfcs/rfc-013-payout-ledger#bank-reconciliation", "finance/budget-2027"]
+    must_not_see:
+      - "vision#acquisition-targets"
+      - "legal/dpa-negotiation"
+  - id: fiona         # finance, through an agent whose grant stops at internal
+    agent: summarizer
+    must_see: ["product/checkout/prd#failure-handling"]
+    must_not_see:
+      - "product/checkout/prd#pricing"
+      - "finance/budget-2027"
+      - "rfcs/rfc-013-payout-ledger#bank-reconciliation"
+  - id: erin          # exec, through an authenticated HTTP session
+    agent: claude-code
+    channel: http
+    must_see: ["vision#acquisition-targets", "finance/budget-2027", "legal/dpa-negotiation"]
+    must_not_see: []
+  - id: erin          # exec, through an untrusted agent: public only
+    agent: untrusted-bot
+    must_see: [vision]
+    must_not_see:
+      - "vision#acquisition-targets"
+      - "product/checkout/prd"
+      - "finance/budget-2027"
+
+# Words that appear only inside hidden sections. No response to a principal who cannot
+# see that section may contain them.
+canaries:
+  - { word: Halcyon, section: "vision#acquisition-targets" }
+  - { word: Loomwright, section: "vision#acquisition-targets" }
+  - { word: Tern, section: "product/checkout/prd#pricing" }
+  - { word: Northwind, section: "rfcs/rfc-013-payout-ledger#bank-reconciliation" }

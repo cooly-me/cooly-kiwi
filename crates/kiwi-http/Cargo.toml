@@ -1,0 +1,18 @@
+[package]
+name = "kiwi-http"
+description = "Kiwi's outbound HTTP client: validated endpoints, secrets from the environment, retries with backoff"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+
+[dependencies]
+http.workspace = true
+thiserror.workspace = true
+ureq.workspace = true
+
+[lints]
+workspace = true

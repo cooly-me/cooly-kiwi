@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="612" viewBox="0 0 900 612" role="img" aria-labelledby="title desc">
+<title id="title">Kiwi retrieval cascade</title>
+<desc id="desc">A search runs inside the caller's view through seven stages: exact lookups, structural filters and a graph hop, BM25 over postings partitioned by permission class, a binary vector scan, reciprocal rank fusion with status priors, an optional cross-encoder rerank of the top results, and a token-budget cut. When every query resolves exactly, the BM25 and vector plugins are skipped.</desc>
+<style>
+text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans",Helvetica,Arial,sans-serif;fill:#e6edf3}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace}
+.t{font-size:14px;font-weight:600}
+.s{font-size:12px;fill:#9198a1}
+.b{font-size:12.5px}
+.code{font-size:11.5px}
+.lane{font-size:11px;font-weight:700;letter-spacing:.08em;fill:#9198a1}
+.el{font-size:11.5px;fill:#9198a1}
+.acc{fill:#79c0ff;font-weight:600}
+.bg{fill:#0d1117}
+.panel{fill:#151b23;stroke:#3d444d}
+.node{fill:#0d1117;stroke:#4d5560;stroke-width:1.2}
+.key{fill:#0f2647;stroke:#4493f8;stroke-width:1.6}
+.gate{fill:#2b2111;stroke:#d29922;stroke-width:1.6}
+.plug{fill:#0d1117;stroke:#7d8590;stroke-width:1.2;stroke-dasharray:5 4}
+.view{fill:none;stroke:#4493f8;stroke-width:1.4;stroke-dasharray:6 4}
+.edge{stroke:#9198a1;stroke-width:1.5;fill:none}
+.dash{stroke-dasharray:5 4}
+.head{fill:#9198a1}
+.off{fill:#262c36}
+.c0{fill:#3fb950}.c1{fill:#4493f8}.c2{fill:#f0883e}
+.tag{font-size:10.5px;font-weight:600;letter-spacing:.04em;fill:#9198a1}
+</style>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="head"/></marker></defs>
+<rect width="900" height="612" rx="12" class="bg"/>
+<rect x="250" y="10" width="400" height="44" rx="22" class="node"/>
+<text x="450" y="37" text-anchor="middle" class="mono b">kiwi_search { queries[], filters, budget }</text>
+<path d="M450 54 V80" class="edge " marker-end="url(#a)"/>
+<rect x="24" y="82" width="852" height="458" rx="14" class="view"/>
+<text x="44" y="108" class="lane">INSIDE THE CALLER'S VIEW</text>
+<text x="856" y="108" text-anchor="end" class="el">hidden atoms are never matched, scored or counted</text>
+<text x="856" y="134" text-anchor="end" class="tag">P50 AT 100K ATOMS</text>
+<rect x="96" y="144" width="168" height="44" rx="10" class="node"/>
+<text x="112" y="171" class="t">1  Exact</text>
+<text x="250" y="170" text-anchor="end" class="tag">CORE</text>
+<text x="284" y="163" class="b">FST lookup of ids, paths, titles, glossary terms and aliases</text>
+<text x="284" y="180" class="s">a matched glossary term adds its synonyms as queries</text>
+<text x="856" y="171" text-anchor="end" class="t mono">0.002 ms</text>
+<path d="M180 188 V198" class="edge " marker-end="url(#a)"/>
+<rect x="96" y="200" width="168" height="44" rx="10" class="node"/>
+<text x="112" y="227" class="t">2  Structural</text>
+<text x="250" y="226" text-anchor="end" class="tag">CORE</text>
+<text x="284" y="219" class="b">type, status, owner, tag and path filters as bitmap intersections</text>
+<text x="284" y="236" class="s">plus one typed graph hop from each exact match</text>
+<text x="856" y="227" text-anchor="end" class="t mono">0.020 ms</text>
+<path d="M180 244 V254" class="edge " marker-end="url(#a)"/>
+<rect x="96" y="256" width="168" height="44" rx="10" class="plug"/>
+<text x="112" y="283" class="t">3  BM25</text>
+<text x="250" y="282" text-anchor="end" class="tag">PLUGIN</text>
+<text x="284" y="275" class="b">postings in the pack, partitioned by permission class</text>
+<text x="284" y="292" class="s">only the view's partitions are read · title ×3, breadcrumb ×1.5</text>
+<text x="856" y="283" text-anchor="end" class="t mono">0.90 ms</text>
+<path d="M180 300 V310" class="edge " marker-end="url(#a)"/>
+<rect x="96" y="312" width="168" height="44" rx="10" class="plug"/>
+<text x="112" y="339" class="t">4  Vector</text>
+<text x="250" y="338" text-anchor="end" class="tag">PLUGIN</text>
+<text x="284" y="331" class="b">384-bit codes, Hamming scan of the candidates, int8 re-scoring</text>
+<text x="284" y="348" class="s">the query is embedded once, by a local model or an API</text>
+<text x="856" y="339" text-anchor="end" class="t mono">0.49 ms</text>
+<path d="M180 356 V366" class="edge " marker-end="url(#a)"/>
+<rect x="96" y="368" width="168" height="44" rx="10" class="key"/>
+<text x="112" y="395" class="t">5  Fusion</text>
+<text x="250" y="394" text-anchor="end" class="tag">CORE</text>
+<text x="284" y="387" class="b">reciprocal rank fusion (k = 60) across tiers and queries</text>
+<text x="284" y="404" class="s">approved ×1.1 · deprecated atoms redirect · corpora merged by score</text>
+<path d="M180 412 V422" class="edge " marker-end="url(#a)"/>
+<rect x="96" y="424" width="168" height="44" rx="10" class="plug"/>
+<text x="112" y="451" class="t">6  Rerank</text>
+<text x="250" y="450" text-anchor="end" class="tag">PLUGIN</text>
+<text x="284" y="443" class="b">off by default: a cross-encoder reorders the top 10 (local) or 20 (HTTP)</text>
+<text x="284" y="460" class="s">reads only what the policy allows · on failure the fused order stands</text>
+<path d="M180 468 V478" class="edge " marker-end="url(#a)"/>
+<rect x="96" y="480" width="168" height="44" rx="10" class="key"/>
+<text x="112" y="507" class="t">7  Budget cut</text>
+<text x="250" y="506" text-anchor="end" class="tag">CORE</text>
+<text x="284" y="499" class="b">every result at L0 first, then L1 summaries in rank order</text>
+<text x="284" y="516" class="s">until the token budget is spent (800 by default)</text>
+<path d="M96 166 C 52 166, 52 166, 52 206 V350 C 52 390, 52 390, 94 390" class="edge dash" marker-end="url(#a)"/>
+<text x="44" y="278.0" text-anchor="middle" class="el" transform="rotate(-90 44 278.0)">every query exact → plugins skipped</text>
+<path d="M180 524 V556" class="edge " marker-end="url(#a)"/>
+<rect x="96" y="558" width="708" height="44" rx="22" class="node"/>
+<text x="450" y="585" text-anchor="middle" class="b">ranked atoms at L1 or L0 · why each matched · warnings · the snapshot</text>
+</svg>

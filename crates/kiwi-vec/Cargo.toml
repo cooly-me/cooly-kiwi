@@ -1,0 +1,31 @@
+[package]
+name = "kiwi-vec"
+description = "Kiwi semantic plugin: binary-quantized embeddings scanned with Hamming distance"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+
+[features]
+default = []
+# Local ONNX embedding models (needs ONNX Runtime).
+fastembed = ["dep:fastembed"]
+# Any server with the OpenAI embeddings API.
+openai = ["dep:kiwi-http"]
+
+[dependencies]
+kiwi-core.workspace = true
+blake3.workspace = true
+fastembed = { workspace = true, optional = true }
+kiwi-http = { workspace = true, optional = true }
+roaring.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true
