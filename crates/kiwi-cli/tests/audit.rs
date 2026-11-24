@@ -109,3 +109,66 @@ fn tampering_with_any_line_is_detected() {
         assert!(String::from_utf8_lossy(&out.stdout).contains(&format!("line {}", target + 1)));
     }
 }
+
+/// A log the Kiwi 0.1.0 binary wrote: records of every tool, a refused proposal's
+/// note and a quarantined torn line.
+const V0_1_0_LOG: &str = include_str!("../../kiwi-policy/tests/fixtures/audit-v0.1.0.log");
+
+#[test]
+fn a_kiwi_0_1_0_log_verifies_grows_and_exports() {
+    let corpus = Corpus::copy();
+    corpus.build(&[]);
+    let log = corpus.root.join(".kiwi/state/audit.log");
+    std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+    std::fs::write(&log, V0_1_0_LOG).unwrap();
+    let path = log.to_str().unwrap();
+    let verify = corpus.kiwi(&["audit", "verify", path]);
+    assert!(verify.status.success());
+    assert!(String::from_utf8_lossy(&verify.stdout).contains("10 records"));
+    // This version's server goes on with the old chain.
+    session(&corpus, 2);
+    let verify = corpus.kiwi(&["audit", "verify", path]);
+    let report = String::from_utf8(verify.stdout).unwrap();
+    assert!(verify.status.success(), "{report}");
+    assert!(
+        report.contains("12 records") && report.contains("break at line 9"),
+        "{report}"
+    );
+
+    // The new records, as sinks receive them.
+    let export = corpus.kiwi(&["audit", "export", path, "--since", "10", "--format", "jsonl"]);
+    assert!(
+        export.status.success(),
+        "{}",
+        String::from_utf8_lossy(&export.stderr)
+    );
+    let shipped: Vec<serde_json::Value> = String::from_utf8(export.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(shipped.len(), 2);
+    for (record, seq) in shipped.iter().zip([11, 12]) {
+        assert_eq!(record["seq"], seq);
+        assert_eq!(record["status"], "ok");
+        assert!(record["tokens"].is_u64() && record["latency_ms"].is_u64());
+        assert!(!record["ids"].as_array().unwrap().is_empty());
+    }
+    // Everything, with the old note replaced by its MAC.
+    let export = corpus.kiwi(&["audit", "export", path]);
+    let text = String::from_utf8(export.stdout).unwrap();
+    assert_eq!(text.lines().count(), 12);
+    assert!(!text.contains("\"note\"") && text.contains("\"note_mac\""));
+    assert!(!text.contains("you may not propose"));
+
+    // Nothing is exported from a log that does not verify, or past a wrong anchor.
+    let export = corpus.kiwi(&["audit", "export", path, "--anchor", &"0".repeat(64)]);
+    assert_eq!(export.status.code(), Some(1));
+    assert!(export.stdout.is_empty());
+    let original = std::fs::read_to_string(&log).unwrap();
+    std::fs::write(&log, original.replacen("\"carl\"", "\"mallory\"", 1)).unwrap();
+    let export = corpus.kiwi(&["audit", "export", path, "--since", "11"]);
+    assert_eq!(export.status.code(), Some(1));
+    assert!(export.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&export.stderr).contains("TAMPERED: line 10"));
+}

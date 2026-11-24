@@ -80,8 +80,10 @@ agree on a disclosure date with you once a fix is ready.
 - The audit chain detects edits, reordering and deletions inside the log. Truncation of
   the tail is only detected against a saved anchor (`kiwi audit verify --anchor`). A
   line a crash left half written is moved aside and recorded as a break in the chain,
-  which `kiwi audit verify` reports. The local `note` of a refused or failed proposal
-  may quote the paths the caller named.
+  which `kiwi audit verify` reports. `kiwi audit export` writes nothing from a log that
+  does not verify, and exports records exactly as sinks receive them (notes as their
+  keyed MACs); it needs the key file only for records that carry a note. The local
+  `note` of a refused or failed proposal may quote the paths the caller named.
 - A corpus configuration may read secrets only from the environment variables the
   operator lists in `KIWI_SECRET_ENV`, and never the HS256 token secret, which is
   reserved before any corpus opens.

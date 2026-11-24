@@ -339,6 +339,9 @@ moved to a quarantine file beside the log (`audit.log.torn-<seq>-<time>`), and t
 continues with a record naming that file, the bytes moved and their BLAKE3 hash;
 `kiwi audit verify` lists each such break and a torn tail not yet moved. A complete line
 that is not a valid record is tampering: the log is not extended, and the answer fails.
+`kiwi audit export --since <seq>` prints the records after a sequence number as sinks
+receive them, once the whole chain verifies (under a shared lock that holds appends
+back), for shipping a log elsewhere in batches.
 
 The local log is the source of truth; sinks ship copies of each line, hash included,
 so a receiver can follow the chain and keep the latest hash as the anchor. A record's

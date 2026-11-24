@@ -180,7 +180,7 @@ one section (`## Pricing {#pricing access=finance}`). Declarations fail closed: 
 malformed one stops the build. Plugins are principals too, so an embeddings API or an
 HTTP reranker receives only what the policy lets `plugin:<name>` read on the network.
 `kiwi policy test` runs the policy's unit tests; `kiwi audit verify` checks the audit
-log's hash chain.
+log's hash chain, and `kiwi audit export` ships its verified records.
 
 **The guarantee:** with the default `bm25_stats = "strict"`, what a caller receives
 depends only on what the caller may read. The leak suite

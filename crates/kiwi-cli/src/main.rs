@@ -192,7 +192,7 @@ enum PolicyCommand {
 
 #[derive(Subcommand)]
 enum AuditCommand {
-    /// Verify the hash chain of an audit log.
+    /// Verify the hash chain of an audit log (records of every Kiwi version).
     Verify {
         /// The log file.
         file: PathBuf,
@@ -200,6 +200,29 @@ enum AuditCommand {
         #[arg(long)]
         anchor: Option<String>,
     },
+    /// Print the records after a sequence number, as sinks receive them (notes
+    /// replaced by their keyed MACs), once the whole chain verifies: for shipping the
+    /// log elsewhere.
+    Export {
+        /// The log file.
+        file: PathBuf,
+        /// Print the records whose sequence number is above this one (0: all).
+        #[arg(long, default_value_t = 0)]
+        since: u64,
+        /// The output format: one JSON record per line.
+        #[arg(long, value_enum, default_value_t = AuditFormat::Jsonl)]
+        format: AuditFormat,
+        /// Expected hash of the last record (catches truncation).
+        #[arg(long)]
+        anchor: Option<String>,
+    },
+}
+
+/// Formats of `kiwi audit export`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum AuditFormat {
+    /// One JSON record per line.
+    Jsonl,
 }
 
 #[derive(Args)]
@@ -303,6 +326,15 @@ fn run() -> Result<()> {
         Command::Audit {
             command: AuditCommand::Verify { file, anchor },
         } => cmd_audit_verify(&file, anchor.as_deref()),
+        Command::Audit {
+            command:
+                AuditCommand::Export {
+                    file,
+                    since,
+                    format: AuditFormat::Jsonl,
+                    anchor,
+                },
+        } => cmd_audit_export(&file, since, anchor.as_deref()),
         Command::Gaps {
             source,
             state,
@@ -885,6 +917,21 @@ fn cmd_audit_verify(file: &Path, anchor: Option<&str>) -> Result<()> {
             println!("TAMPERED: {error}");
             std::process::exit(1);
         }
+    }
+}
+
+/// Prints the verified records after `since`; on a broken chain, prints nothing to
+/// standard output and fails.
+fn cmd_audit_export(file: &Path, since: u64, anchor: Option<&str>) -> Result<()> {
+    let stdout = std::io::stdout();
+    let mut out = std::io::BufWriter::new(stdout.lock());
+    match audit::export(file, since, anchor, &mut out) {
+        Ok(_) => Ok(()),
+        Err(error @ audit::AuditError::Broken { .. }) => {
+            eprintln!("TAMPERED: {error}");
+            std::process::exit(1);
+        }
+        Err(error) => Err(error.into()),
     }
 }
 

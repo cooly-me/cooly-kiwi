@@ -24,6 +24,7 @@
 //! document), so it stays in the local log and a sink receives only a keyed BLAKE3 of
 //! it (`note_mac`), under a key kept beside the local log (`audit.log.key`): enough to
 //! match the record against the local log, and no way to test a guess of its text.
+//! [`export`] prints verified records the same way, for shipping a log elsewhere.
 
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -748,6 +749,86 @@ pub fn verify(path: &Path, anchor: Option<&str>) -> Result<VerifyReport, AuditEr
     })
 }
 
+/// Holds a shared lock of a log file until dropped: appends, which take the exclusive
+/// lock, wait until it is released.
+struct SharedLock<'a>(&'a File);
+
+impl<'a> SharedLock<'a> {
+    fn take(file: &'a File) -> std::io::Result<Self> {
+        file.lock_shared()?;
+        Ok(Self(file))
+    }
+}
+
+impl Drop for SharedLock<'_> {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
+/// Writes the records of the log at `path` whose sequence number is above `since` to
+/// `out`, one JSON line each, exactly as a sink receives them (a `note` replaced by its
+/// `note_mac`, a quarantine record's hash and length of the torn bytes by their MAC):
+/// for shipping elsewhere. The whole chain is verified first, and against `anchor`
+/// when given, under a shared lock that holds appends back until the export is
+/// written; nothing is written from a log that does not verify. Returns how many
+/// records were written.
+pub fn export(path: &Path, since: u64, anchor: Option<&str>, out: &mut dyn Write) -> Result<u64, AuditError> {
+    let io = |source: std::io::Error| AuditError::Io {
+        path: path.to_owned(),
+        source,
+    };
+    let file = File::open(path).map_err(io)?;
+    let _lock = SharedLock::take(&file).map_err(io)?;
+    let checked = scan(BufReader::new(&file), path)?;
+    if let Some(anchor) = anchor
+        && anchor != checked.last
+    {
+        return Err(AuditError::Broken {
+            line: checked.records,
+            reason: "last record does not match the anchor (the log was truncated?)".into(),
+        });
+    }
+    let mut reader = BufReader::new(&file);
+    reader.seek(SeekFrom::Start(0)).map_err(io)?;
+    let mut key: Option<[u8; 32]> = None;
+    let mut written = 0u64;
+    let mut line = String::new();
+    for number in 1..=checked.records {
+        line.clear();
+        reader.read_line(&mut line).map_err(io)?;
+        let text = line.trim_end_matches('\n');
+        let record: Record = serde_json::from_str(text).map_err(|e| AuditError::Broken {
+            line: number,
+            reason: format!("not a record: {e}"),
+        })?;
+        if record.body.seq <= since {
+            continue;
+        }
+        let shipped = if record.body.event.note.is_some() || record.body.quarantined.is_some() {
+            let key = match key {
+                Some(key) => key,
+                None => {
+                    let read = read_note_key(path).map_err(|source| AuditError::Io {
+                        path: note_key_path(path),
+                        source,
+                    })?;
+                    *key.insert(read)
+                }
+            };
+            for_sinks(text, &key).map_err(|e| io(std::io::Error::other(e)))?
+        } else {
+            text.to_owned()
+        };
+        out.write_all(shipped.as_bytes())
+            .and_then(|()| out.write_all(b"\n"))
+            .map_err(io)?;
+        written += 1;
+    }
+    out.flush().map_err(io)?;
+    Ok(written)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -1059,6 +1140,64 @@ mod tests {
             serde_json::to_string(&AuditStatus::Refused).unwrap(),
             "\"refused\""
         );
+    }
+
+    #[test]
+    fn export_ships_verified_records_after_a_sequence_number() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.log");
+        let kept = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let log = AuditLog::open(&path, vec![Box::new(Kept(std::sync::Arc::clone(&kept)))]).unwrap();
+        log.record(event(1)).unwrap();
+        log.record(AuditEvent {
+            note: Some("refused: finance/budget-2027.md".into()),
+            status: Some(AuditStatus::Refused),
+            ..event(2)
+        })
+        .unwrap();
+        let last = log.record(full_event()).unwrap();
+        drop(log);
+        let mut out = Vec::new();
+        assert_eq!(export(&path, 1, Some(&last), &mut out).unwrap(), 2);
+        let exported = String::from_utf8(out).unwrap();
+        // Exactly what the sinks received, after record 1.
+        let shipped = kept.lock().unwrap().clone();
+        assert_eq!(exported, shipped[1..].join("\n") + "\n");
+        assert!(!exported.contains("budget-2027"));
+        let mut all = Vec::new();
+        assert_eq!(export(&path, 0, None, &mut all).unwrap(), 3);
+        let mut none = Vec::new();
+        assert_eq!(export(&path, 3, None, &mut none).unwrap(), 0);
+        assert!(none.is_empty());
+        // A wrong anchor or an edited line: nothing is exported.
+        let mut out = Vec::new();
+        assert!(export(&path, 0, Some(GENESIS), &mut out).is_err());
+        assert!(out.is_empty());
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, text.replacen("\"alice\"", "\"eve\"", 1)).unwrap();
+        assert!(export(&path, 2, None, &mut out).is_err());
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn export_of_a_note_needs_the_key_and_nothing_else_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.log");
+        let log = AuditLog::open(&path, Vec::new()).unwrap();
+        log.record(event(1)).unwrap();
+        log.record(AuditEvent {
+            note: Some("a note".into()),
+            ..event(2)
+        })
+        .unwrap();
+        log.record(event(3)).unwrap();
+        drop(log);
+        std::fs::remove_file(note_key_path(&path)).unwrap();
+        let mut out = Vec::new();
+        assert!(export(&path, 0, None, &mut out).is_err());
+        let mut out = Vec::new();
+        assert_eq!(export(&path, 2, None, &mut out).unwrap(), 1);
+        assert!(!note_key_path(&path).exists(), "an export never makes a key");
     }
 
     #[test]

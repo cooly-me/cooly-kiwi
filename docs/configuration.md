@@ -161,6 +161,7 @@ refuse when there is none.
 | `kiwi export <corpus>` | `--format llms-txt` or `jsonl`, `--principal`, `--agent` (default `cli`) |
 | `kiwi gc <corpus>` | `--keep <n>` (default `packs.keep`) |
 | `kiwi audit verify <file>` | `--anchor <hash>` (the expected last hash, to catch truncation); logs of every Kiwi version |
+| `kiwi audit export <file>` | `--since <seq>` (print the records after this sequence number; default 0, all), `--format jsonl` (the default), `--anchor <hash>`; prints the records as sinks receive them, only after the whole chain verifies; exit code 1 and nothing printed otherwise |
 | `kiwi bench [corpus]` | `--questions`, `--principals`, `--embedder`, `--repeat`, `--synthetic <atoms>`, `--keep-synthetic <dir>`, `--rerank <model>`, `--rerank-top-k <n>`, `--json` |
 | `kiwi info` | the version and compiled-in plugins |
 
@@ -214,7 +215,7 @@ records hash as they were written; a record written by Kiwi 0.1.0 has none of th
 | `latency_ms` | integer | *new*; on every call record: server time until the record |
 | `queries` | array of strings | *new*; only with `audit.record_requests` and when the call named any |
 | `reference` | string | *new*; on a `failed` record: the reference the caller was given |
-| `note` | string | local log only, when there is one: why a proposal was refused or failed, conflicts with hidden content, the cause of a failure; a sink gets `note_mac` (64 hex) instead |
+| `note` | string | local log only, when there is one: why a proposal was refused or failed, conflicts with hidden content, the cause of a failure; a sink and `kiwi audit export` get `note_mac` (64 hex) instead |
 | `quarantined` | object `{file, bytes, blake3}` | on a quarantine record; a sink gets `{file, mac}` |
 | `prev`, `hash` | string, 64 hex | always |
 
