@@ -1,0 +1,41 @@
+# The principal directory: people, their groups, and the e-mail a local Git identity
+# maps to (a convenience for the local user over stdio, not an authentication).
+users:
+  - id: alice
+    name: Alice (engineering)
+    groups: [eng, staff]
+    emails: [alice@acme.test]
+  - id: priya
+    name: Priya (product)
+    groups: [product, staff]
+    emails: [priya@acme.test]
+  - id: fiona
+    name: Fiona (finance)
+    groups: [finance, staff]
+    emails: [fiona@acme.test]
+  - id: erin
+    name: Erin (exec)
+    groups: [exec, finance, legal, staff]
+    emails: [erin@acme.test]
+  - id: paul
+    name: Paul (platform)
+    groups: [eng, platform, staff]
+    emails: [paul@acme.test]
+  - id: carl
+    name: Carl (contractor)
+    groups: []
+    emails: [carl@contractor.test]
+
+# Agents, an allow-list: each with the most its grant covers, whoever it acts for.
+agents:
+  - id: claude-code
+  - id: cursor
+  - id: cli                 # the kiwi command line (kiwi query, export, gaps)
+  - id: summarizer
+    labels: [public, internal]
+  - id: untrusted-bot
+    labels: [public]
+
+# Any other agent, and an HTTP token that names no client, reads nothing.
+default_agent:
+  labels: []

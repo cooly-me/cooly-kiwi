@@ -1,0 +1,21 @@
+[package]
+name = "kiwi-bm25"
+description = "Kiwi lexical plugin: BM25 over postings stored in the pack, partitioned by permission class"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+
+[dependencies]
+kiwi-core.workspace = true
+blake3.workspace = true
+frostem.workspace = true
+fst.workspace = true
+rkyv.workspace = true
+roaring.workspace = true
+
+[lints]
+workspace = true

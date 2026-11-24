@@ -1,0 +1,28 @@
+[package]
+name = "kiwi-rerank"
+description = "Kiwi rerank plugin: a cross-encoder over the top of a search, local or over HTTP"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+
+[features]
+default = []
+# The local backend: fastembed's ONNX cross-encoders.
+fastembed = ["dep:fastembed"]
+
+[dependencies]
+kiwi-core.workspace = true
+kiwi-http.workspace = true
+fastembed = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

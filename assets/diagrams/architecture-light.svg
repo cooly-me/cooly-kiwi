@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="462" viewBox="0 0 900 462" role="img" aria-labelledby="title desc">
+<title id="title">Kiwi architecture</title>
+<desc id="desc">Build time: a Git commit is compiled in parallel, indexed by plugins (BM25 postings by permission class, vectors from a local model or an API) and written as one immutable Kiwi Pack per corpus. Query time: an agent calls the MCP server, which federates corpora by namespace; each corpus's policy gate computes the caller's view, and the planner answers from the memory-mapped packs with an optional rerank. Proposals become branches and pull requests; every answer is written to a hash-chained audit log and shipped to its sinks.</desc>
+<style>
+text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans",Helvetica,Arial,sans-serif;fill:#1f2328}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace}
+.t{font-size:14px;font-weight:600}
+.s{font-size:12px;fill:#59636e}
+.b{font-size:12.5px}
+.code{font-size:11.5px}
+.lane{font-size:11px;font-weight:700;letter-spacing:.08em;fill:#59636e}
+.el{font-size:11.5px;fill:#59636e}
+.acc{fill:#0550ae;font-weight:600}
+.bg{fill:#ffffff}
+.panel{fill:#f6f8fa;stroke:#d1d9e0}
+.node{fill:#ffffff;stroke:#b7c0ca;stroke-width:1.2}
+.key{fill:#ddf4ff;stroke:#0969da;stroke-width:1.6}
+.gate{fill:#fff8c5;stroke:#9a6700;stroke-width:1.6}
+.plug{fill:#ffffff;stroke:#818b98;stroke-width:1.2;stroke-dasharray:5 4}
+.view{fill:none;stroke:#0969da;stroke-width:1.4;stroke-dasharray:6 4}
+.edge{stroke:#59636e;stroke-width:1.5;fill:none}
+.dash{stroke-dasharray:5 4}
+.head{fill:#59636e}
+.off{fill:#eaeef2}
+.c0{fill:#1a7f37}.c1{fill:#0969da}.c2{fill:#bc4c00}
+.tag{font-size:10.5px;font-weight:600;letter-spacing:.04em;fill:#59636e}
+</style>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="head"/></marker></defs>
+<rect width="900" height="462" rx="12" class="bg"/>
+<rect x="36" y="8" width="848" height="164" rx="12" class="panel"/>
+<text x="56" y="33" class="lane">BUILD · ONCE PER COMMIT</text>
+<rect x="52" y="48" width="180" height="100" rx="10" class="node"/>
+<text x="142.0" y="72" text-anchor="middle" class="t">Git commit</text>
+<text x="142.0" y="93" text-anchor="middle" class="s">Markdown + frontmatter</text>
+<text x="142.0" y="110" text-anchor="middle" class="s">KIWIOWNERS</text>
+<text x="142.0" y="127" text-anchor="middle" class="s">policy.cedar</text>
+<rect x="264" y="48" width="180" height="100" rx="10" class="node"/>
+<text x="354.0" y="72" text-anchor="middle" class="t">Compiler</text>
+<text x="354.0" y="93" text-anchor="middle" class="s">atoms split at headings</text>
+<text x="354.0" y="110" text-anchor="middle" class="s">permission classes</text>
+<text x="354.0" y="127" text-anchor="middle" class="s">graph · glossary · parallel</text>
+<rect x="476" y="48" width="180" height="100" rx="10" class="plug"/>
+<text x="566.0" y="72" text-anchor="middle" class="t">Indexer plugins</text>
+<text x="566.0" y="93" text-anchor="middle" class="s">BM25 postings by class</text>
+<text x="566.0" y="110" text-anchor="middle" class="s">vectors: local or API</text>
+<text x="566.0" y="127" text-anchor="middle" class="s">changed atoms only</text>
+<rect x="688" y="48" width="180" height="100" rx="10" class="key"/>
+<text x="778.0" y="72" text-anchor="middle" class="t">Kiwi Pack per corpus</text>
+<text x="778.0" y="93" text-anchor="middle" class="s">immutable, @commit</text>
+<text x="778.0" y="110" text-anchor="middle" class="s">rkyv archive · mmap</text>
+<text x="778.0" y="127" text-anchor="middle" class="s">content-addressed</text>
+<path d="M232 98 H262" class="edge " marker-end="url(#a)"/>
+<path d="M444 98 H474" class="edge " marker-end="url(#a)"/>
+<path d="M656 98 H686" class="edge " marker-end="url(#a)"/>
+<rect x="36" y="196" width="848" height="258" rx="12" class="panel"/>
+<text x="56" y="221" class="lane">QUERY · EVERY TOOL CALL</text>
+<rect x="52" y="236" width="180" height="100" rx="10" class="node"/>
+<text x="142.0" y="260" text-anchor="middle" class="t">Agent</text>
+<text x="142.0" y="281" text-anchor="middle" class="s">any MCP client</text>
+<text x="142.0" y="298" text-anchor="middle" class="s">acting for a person</text>
+<rect x="264" y="236" width="180" height="100" rx="10" class="node"/>
+<text x="354.0" y="260" text-anchor="middle" class="t">MCP server</text>
+<text x="354.0" y="281" text-anchor="middle" class="s">6 tools · 1 resource</text>
+<text x="354.0" y="298" text-anchor="middle" class="s">corpora by namespace</text>
+<text x="354.0" y="315" text-anchor="middle" class="s">stdio · HTTP + OAuth</text>
+<rect x="476" y="236" width="180" height="100" rx="10" class="gate"/>
+<text x="566.0" y="260" text-anchor="middle" class="t">Policy gate</text>
+<text x="566.0" y="281" text-anchor="middle" class="s">user ∩ agent ∩ session</text>
+<text x="566.0" y="298" text-anchor="middle" class="s">Cedar per corpus</text>
+<text x="566.0" y="315" text-anchor="middle" class="s">view = OR of bitmaps</text>
+<rect x="688" y="236" width="180" height="100" rx="10" class="node"/>
+<text x="778.0" y="260" text-anchor="middle" class="t">Planner</text>
+<text x="778.0" y="281" text-anchor="middle" class="s">exact → structural</text>
+<text x="778.0" y="298" text-anchor="middle" class="s">→ BM25 → vector</text>
+<text x="778.0" y="315" text-anchor="middle" class="s">fusion → rerank → budget</text>
+<path d="M232 286 H262" class="edge " marker-end="url(#a)"/>
+<path d="M444 286 H474" class="edge " marker-end="url(#a)"/>
+<path d="M656 286 H686" class="edge " marker-end="url(#a)"/>
+<path d="M778 148 V234" class="edge dash" marker-end="url(#a)"/>
+<text x="788" y="188" class="el">mmap, zero-copy</text>
+<path d="M354 336 V364" class="edge " marker-end="url(#a)"/>
+<rect x="264" y="366" width="180" height="66" rx="10" class="node"/>
+<text x="354.0" y="393" text-anchor="middle" class="t mono">kiwi_propose</text>
+<text x="354.0" y="414" text-anchor="middle" class="s">branch + pull request</text>
+<path d="M566 336 V364" class="edge " marker-end="url(#a)"/>
+<rect x="476" y="366" width="180" height="66" rx="10" class="node"/>
+<text x="566.0" y="393" text-anchor="middle" class="t">Audit log</text>
+<text x="566.0" y="414" text-anchor="middle" class="s">hash-chained · sinks</text>
+<rect x="688" y="366" width="180" height="66" rx="10" class="node"/>
+<text x="778.0" y="393" text-anchor="middle" class="t">Response cache</text>
+<text x="778.0" y="414" text-anchor="middle" class="s">per pack, view, request</text>
+<path d="M778 336 V364" class="edge dash" marker-end="url(#a)"/>
+<path d="M264 399 H18 V98 H50" class="edge " marker-end="url(#a)"/>
+<text x="142" y="390" text-anchor="middle" class="el">merge → new commit → new pack</text>
+</svg>

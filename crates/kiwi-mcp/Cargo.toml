@@ -1,0 +1,36 @@
+[package]
+name = "kiwi-mcp"
+description = "Kiwi MCP server: six tools over stdio and Streamable HTTP"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+
+[features]
+default = ["http"]
+http = ["dep:axum", "dep:jsonwebtoken", "rmcp/transport-streamable-http-server"]
+
+[dependencies]
+kiwi-core = { workspace = true, features = ["schema"] }
+kiwi-policy.workspace = true
+kiwi-compiler.workspace = true
+axum = { workspace = true, optional = true }
+blake3.workspace = true
+jsonwebtoken = { workspace = true, optional = true }
+http.workspace = true
+rmcp = { workspace = true, features = ["server", "transport-io", "macros"] }
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

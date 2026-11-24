@@ -1,0 +1,62 @@
+[package]
+name = "kiwi-cli"
+description = "The kiwi binary: build, serve, policy test, lint, bench and audit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+
+[[bin]]
+name = "kiwi"
+path = "src/main.rs"
+
+[features]
+default = ["bm25", "vec", "openai", "fastembed", "rerank", "wasm", "http"]
+# Lexical search.
+bm25 = ["dep:kiwi-bm25"]
+# Vector search (with the `hash` embedder; add a backend below for real models).
+vec = ["dep:kiwi-vec"]
+# Embeddings from any OpenAI-compatible API.
+openai = ["vec", "kiwi-vec/openai"]
+# Local ONNX models for embeddings and reranking (links ONNX Runtime).
+fastembed = ["vec", "rerank", "kiwi-vec/fastembed", "kiwi-rerank/fastembed"]
+# Cross-encoder reranking over HTTP (and locally with `fastembed`).
+rerank = ["dep:kiwi-rerank"]
+# Third-party WebAssembly plugins.
+wasm = ["dep:kiwi-wasm"]
+# Streamable HTTP with OAuth 2.1.
+http = ["kiwi-mcp/http"]
+
+[dependencies]
+kiwi-core.workspace = true
+kiwi-compiler.workspace = true
+kiwi-policy.workspace = true
+kiwi-mcp.workspace = true
+kiwi-http.workspace = true
+kiwi-bm25 = { workspace = true, optional = true }
+kiwi-vec = { workspace = true, optional = true }
+kiwi-wasm = { workspace = true, optional = true }
+kiwi-rerank = { workspace = true, optional = true }
+anyhow.workspace = true
+roaring.workspace = true
+serde_yaml_ng.workspace = true
+tempfile.workspace = true
+clap.workspace = true
+notify.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+reqwest.workspace = true
+kiwi-bm25.workspace = true
+kiwi-vec.workspace = true
+jsonwebtoken.workspace = true
+rmcp = { workspace = true, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
+
+[lints]
+workspace = true

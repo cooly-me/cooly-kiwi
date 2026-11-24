@@ -1,0 +1,7 @@
+# Access by path, CODEOWNERS style: the last matching rule wins.
+# A document's frontmatter `access:` replaces its rule; heading attributes narrow it.
+*                label=internal
+vision.md        label=public
+glossary.md      label=public
+finance/**       label=confidential groups=finance
+legal/**         label=confidential groups=legal

@@ -1,0 +1,18 @@
+[package]
+name = "kiwi-wasm"
+description = "Kiwi third-party plugins as sandboxed WebAssembly components"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+
+[dependencies]
+kiwi-core.workspace = true
+wasmtime.workspace = true
+wit-component.workspace = true
+
+[lints]
+workspace = true
