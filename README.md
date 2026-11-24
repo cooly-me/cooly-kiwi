@@ -217,14 +217,14 @@ answers are hidden from the asker, 7 principal and agent pairs):
 
 | Mode | recall@5 | recall@10 | MRR | p95 |
 | --- | ---: | ---: | ---: | ---: |
-| bm25 | 0.848 | 0.947 | 0.677 | 0.068 ms |
+| bm25 | 0.848 | 0.947 | 0.677 | 0.075 ms |
 | bm25 + vectors (`multilingual-e5-small`) | 0.917 | 0.936 | 0.743 | the query embedding |
 | bm25 + vectors + local rerank of the top 10 | 0.902 | 0.936 | 0.917 | about 0.1 s a passage |
 
 None of these modes returned a hidden answer; the leak checks found 0 violations in 555
-responses. A catalogue of 10,000 short records answers a BM25 search in 0.20 ms at p95
-and swaps in a new pack in 10 ms; 100,000 synthetic atoms build in 13 s, rebuild after
-a one-file change in 1.7 s and answer a BM25 search in 1.6 ms at p95 (AMD Ryzen 5
+responses. A catalogue of 10,000 short records answers a BM25 search in 0.21 ms at p95
+and swaps in a new pack in 15 ms; 100,000 synthetic atoms build in 14 s, rebuild after
+a one-file change in 1.7 s and answer a BM25 search in 2.0 ms at p95 (AMD Ryzen 5
 5600G, Ubuntu 22.04, release build, in-process). [docs/design.md](docs/design.md#results)
 has every table, the machines and the commands.
 

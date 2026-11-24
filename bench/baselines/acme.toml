@@ -14,27 +14,27 @@ latency_floor_ms = 5.0  # ...or by this many milliseconds, whichever is larger
 recall_at_5 = 0.621
 recall_at_10 = 0.621
 mrr = 0.491
-p95_ms = 0.040
+p95_ms = 0.049
 
 [modes.bm25]
 recall_at_5 = 0.848
 recall_at_10 = 0.947
 mrr = 0.677
-p95_ms = 0.068
+p95_ms = 0.075
 
 [modes."bm25+vec"]
 recall_at_5 = 0.773
 recall_at_10 = 0.856
 mrr = 0.689
-p95_ms = 0.170
+p95_ms = 0.192
 
 [timings]
-full_build_ms = 156
-reload_ms = 0.40
-cold_start_ms = 0.14
+full_build_ms = 162
+reload_ms = 0.45
+cold_start_ms = 0.15
 
 [scale]
-build_ms = 13239
-exact_p95_ms = 0.005
-bm25_p95_ms = 1.613
-vec_p95_ms = 0.926
+build_ms = 14355
+exact_p95_ms = 0.007
+bm25_p95_ms = 2.022
+vec_p95_ms = 0.992

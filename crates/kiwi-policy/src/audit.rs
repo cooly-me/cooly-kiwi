@@ -3,8 +3,8 @@
 //! A record says who called which tool, how the call ended, which atoms it returned by
 //! their stable ids and documents, the tokens of the body the caller received and the
 //! budget applied, and the server time; what the caller asked for only when the corpus
-//! records requests. Fields added after Kiwi 0.1.0 are left out when empty, so the
-//! records of older logs still hash as they were written.
+//! records requests. Optional fields are left out when empty, so a record hashes the
+//! same whichever of them it carries, and records without them verify as written.
 //!
 //! Every record carries the hash of the record before it, and its own hash covers its
 //! content and that link. Editing, reordering or deleting any line breaks the chain at
@@ -84,8 +84,8 @@ pub enum AuditStatus {
 
 /// What one record says.
 ///
-/// Every field added after Kiwi 0.1.0 is left out of the record when empty or unset, so
-/// the records of older logs, which never had them, hash and verify as written.
+/// Every optional field is left out of the record when empty or unset, so records that
+/// never had it hash and verify as written.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditEvent {
     /// The user.
@@ -98,8 +98,8 @@ pub struct AuditEvent {
     pub tool: String,
     /// The snapshot answered from.
     pub snapshot: String,
-    /// The corpus's namespace. Left out of the record when empty, so the hashes of logs
-    /// written by Kiwi 0.1, which had no such field, still verify.
+    /// The corpus's namespace. Left out of the record when empty, so a record of a
+    /// corpus served alone hashes without it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub namespace: String,
     /// Pack uids of `ids`. They name atoms of one pack only: `ids` is what stays
@@ -967,7 +967,7 @@ mod tests {
         std::fs::write(&path, lines[..4].join("\n") + "\n").unwrap();
         assert!(verify(&path, None).is_ok());
         assert!(verify(&path, Some(&anchor)).is_err());
-        // A record without a namespace, as Kiwi 0.1 wrote them, has no such field.
+        // A record without a namespace has no such field.
         let old = dir.path().join("old.log");
         let log = AuditLog::open(&old, Vec::new()).unwrap();
         log.record(AuditEvent {
@@ -1047,10 +1047,10 @@ mod tests {
         assert_eq!(moved.quarantine.blake3, blake3::hash(torn).to_hex().to_string());
     }
 
-    /// A log written by the Kiwi 0.1.0 binary: tool records of every kind, a refused
-    /// proposal's note and a quarantined torn line.
-    const V0_1_0_LOG: &str = include_str!("../tests/fixtures/audit-v0.1.0.log");
-    const V0_1_0_LAST: &str = "a9c72f559b4de9fcbbc21b4fdaaf2474498fdc2677ca6745a6fbf477ff769d99";
+    /// A log whose records carry none of the optional fields: tool records of every
+    /// kind, a refused proposal's note and a quarantined torn line.
+    const MINIMAL_LOG: &str = include_str!("../tests/fixtures/audit-minimal.log");
+    const MINIMAL_LAST: &str = "a9c72f559b4de9fcbbc21b4fdaaf2474498fdc2677ca6745a6fbf477ff769d99";
 
     fn full_event() -> AuditEvent {
         AuditEvent {
@@ -1067,29 +1067,29 @@ mod tests {
     }
 
     #[test]
-    fn a_log_written_by_kiwi_0_1_0_verifies_and_grows() {
+    fn a_log_of_minimal_records_verifies_and_grows() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("audit.log");
-        std::fs::write(&path, V0_1_0_LOG).unwrap();
-        let report = verify(&path, Some(V0_1_0_LAST)).unwrap();
+        std::fs::write(&path, MINIMAL_LOG).unwrap();
+        let report = verify(&path, Some(MINIMAL_LAST)).unwrap();
         assert_eq!((report.records, report.breaks.len()), (10, 1));
-        // Every old record reads back into the new shape and hashes as written.
-        for line in V0_1_0_LOG.lines() {
+        // Every record reads back with its optional fields empty and hashes as written.
+        for line in MINIMAL_LOG.lines() {
             let record: Record = serde_json::from_str(line).unwrap();
             assert_eq!(hash_body(&record.body).unwrap(), record.hash);
             assert_eq!(record.body.event.status, None);
             assert!(record.body.event.ids.is_empty());
         }
-        // A server of this version extends it with records carrying the new fields.
+        // A server extends it with records carrying every field.
         let log = AuditLog::open(&path, Vec::new()).unwrap();
         let last = log.record(full_event()).unwrap();
         drop(log);
         let report = verify(&path, Some(&last)).unwrap();
         assert_eq!(report.records, 11);
         let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.starts_with(V0_1_0_LOG), "old lines are never rewritten");
+        assert!(text.starts_with(MINIMAL_LOG), "earlier lines are never rewritten");
         let added: serde_json::Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
-        assert_eq!(added["prev"], V0_1_0_LAST);
+        assert_eq!(added["prev"], MINIMAL_LAST);
         assert_eq!(added["status"], "ok");
         assert_eq!(added["ids"][0], "product/fees#rules");
         assert_eq!(added["docs"], serde_json::json!(["product/fees"]));

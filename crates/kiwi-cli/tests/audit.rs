@@ -110,22 +110,22 @@ fn tampering_with_any_line_is_detected() {
     }
 }
 
-/// A log the Kiwi 0.1.0 binary wrote: records of every tool, a refused proposal's
-/// note and a quarantined torn line.
-const V0_1_0_LOG: &str = include_str!("../../kiwi-policy/tests/fixtures/audit-v0.1.0.log");
+/// A log whose records carry none of the optional fields: records of every tool, a
+/// refused proposal's note and a quarantined torn line.
+const MINIMAL_LOG: &str = include_str!("../../kiwi-policy/tests/fixtures/audit-minimal.log");
 
 #[test]
-fn a_kiwi_0_1_0_log_verifies_grows_and_exports() {
+fn a_log_of_minimal_records_verifies_grows_and_exports() {
     let corpus = Corpus::copy();
     corpus.build(&[]);
     let log = corpus.root.join(".kiwi/state/audit.log");
     std::fs::create_dir_all(log.parent().unwrap()).unwrap();
-    std::fs::write(&log, V0_1_0_LOG).unwrap();
+    std::fs::write(&log, MINIMAL_LOG).unwrap();
     let path = log.to_str().unwrap();
     let verify = corpus.kiwi(&["audit", "verify", path]);
     assert!(verify.status.success());
     assert!(String::from_utf8_lossy(&verify.stdout).contains("10 records"));
-    // This version's server goes on with the old chain.
+    // A server goes on with the chain.
     session(&corpus, 2);
     let verify = corpus.kiwi(&["audit", "verify", path]);
     let report = String::from_utf8(verify.stdout).unwrap();
@@ -154,7 +154,7 @@ fn a_kiwi_0_1_0_log_verifies_grows_and_exports() {
         assert!(record["tokens"].is_u64() && record["latency_ms"].is_u64());
         assert!(!record["ids"].as_array().unwrap().is_empty());
     }
-    // Everything, with the old note replaced by its MAC.
+    // Everything, with the note replaced by its MAC.
     let export = corpus.kiwi(&["audit", "export", path]);
     let text = String::from_utf8(export.stdout).unwrap();
     assert_eq!(text.lines().count(), 12);

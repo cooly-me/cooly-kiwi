@@ -193,7 +193,7 @@ enum PolicyCommand {
 
 #[derive(Subcommand)]
 enum AuditCommand {
-    /// Verify the hash chain of an audit log (records of every Kiwi version).
+    /// Verify the hash chain of an audit log.
     Verify {
         /// The log file.
         file: PathBuf,

@@ -342,8 +342,8 @@ changes, never a new path. What the caller asked for (search queries, read ids, 
 scope, a trace id, a feedback query, the sections and paths a proposal names, a
 resource URI) is recorded only when the corpus sets `audit.record_requests`: query text
 can be personal or confidential in itself, and is otherwise kept nowhere but in the
-knowledge-gap queue. Fields added after Kiwi 0.1.0 are left out when empty, so records
-of older logs hash and verify as they were written. Each record carries the hash of
+knowledge-gap queue. Optional fields are left out when empty, so a record hashes the
+same whichever of them it carries. Each record carries the hash of
 the previous one, and its own hash covers its content and
 that link, so editing, reordering or deleting a line breaks the chain where
 `kiwi audit verify` finds it. Truncation of the tail is caught against a saved anchor
@@ -709,10 +709,10 @@ deterministic stand-in for a model.
 
 | Mode | recall@5 | recall@10 | MRR | tokens / question | p50 | p95 | p99 | leaks |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| grep + read 3 files (document level) | 0.989 | 1.000 | 0.828 | 3,722 | 0.53 ms | 0.74 ms | 0.78 ms | 5 |
-| navigation (no index) | 0.621 | 0.621 | 0.491 | 6,002 | 0.032 ms | 0.040 ms | 0.054 ms | 0 |
-| bm25 | 0.848 | 0.947 | 0.677 | 1,721 | 0.036 ms | 0.068 ms | 0.079 ms | 0 |
-| bm25 + vec (`hash`) | 0.773 | 0.856 | 0.689 | 1,724 | 0.13 ms | 0.17 ms | 0.19 ms | 0 |
+| grep + read 3 files (document level) | 0.989 | 1.000 | 0.828 | 3,722 | 0.53 ms | 0.80 ms | 0.86 ms | 5 |
+| navigation (no index) | 0.621 | 0.621 | 0.491 | 6,002 | 0.031 ms | 0.049 ms | 0.064 ms | 0 |
+| bm25 | 0.848 | 0.947 | 0.677 | 1,721 | 0.038 ms | 0.075 ms | 0.109 ms | 0 |
+| bm25 + vec (`hash`) | 0.773 | 0.856 | 0.689 | 1,724 | 0.14 ms | 0.19 ms | 0.24 ms | 0 |
 
 With models (`bench/run.sh --models`, vectors from `multilingual-e5-small`, the local
 cross-encoder `jina-reranker-v2-base-multilingual` reading 192 tokens of each passage):
@@ -729,8 +729,8 @@ rerank is off by default and, on a GPU server, best used through the HTTP backen
 (TEI, vLLM, Infinity, or a hosted API) with a larger `top_k`. *leaks*: hidden answers
 returned to someone who may not see them (grep has no permissions); the leak suite
 checked 555 responses of every tool for the 7 pairs, with 0 violations. Builds: full
-156 ms, one file changed 66 ms (5 atoms compiled), no change 37 ms (0 compiled, pack
-not rewritten); pack 0.31 MB; reload (policy, pack and retrievers swapped in) 0.40 ms.
+162 ms, one file changed 52 ms (5 atoms compiled), no change 45 ms (0 compiled, pack
+not rewritten); pack 0.31 MB; reload (policy, pack and retrievers swapped in) 0.45 ms.
 
 **Catalogue** (`bench/catalogue.py`): 10,000 one-record documents of a marketplace's
 services and proposals, in Vietnamese, each a title, a group, a status, tags, a
@@ -741,25 +741,25 @@ detection among many short, similar records.
 
 | Mode | recall@5 | recall@10 | MRR | p50 | p95 | p99 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| grep + read 3 files | 0.616 | 0.680 | 0.799 | 9.6 ms | 14.9 ms | 16.9 ms |
-| bm25 | 0.543 | 0.576 | 0.752 | 0.10 ms | 0.20 ms | 0.25 ms |
-| bm25 + vec (`hash`) | 0.364 | 0.531 | 0.491 | 0.33 ms | 0.47 ms | 0.53 ms |
+| grep + read 3 files | 0.616 | 0.680 | 0.799 | 9.0 ms | 13.2 ms | 14.4 ms |
+| bm25 | 0.543 | 0.576 | 0.752 | 0.11 ms | 0.21 ms | 0.27 ms |
+| bm25 + vec (`hash`) | 0.364 | 0.531 | 0.491 | 0.27 ms | 0.42 ms | 0.49 ms |
 
 A rewording that shares no word with the query (`làm MC` for `dẫn chương trình`) is
 out of reach of any lexical method, which bounds recall here; grep ranks by the count
 of query words a whole file holds, summary and tags included, which suits records of
-one line. Builds: full 2.0 s, one file changed 0.44 s, no change 0.52 s; pack 15.2 MB;
-reload 9.6 ms.
+one line. Builds: full 1.9 s, one file changed 0.38 s, no change 0.38 s; pack 15.2 MB;
+reload 15 ms.
 
 **Scale**: 100,000 synthetic atoms (5,000 documents of 20 sections, 10 % confidential;
 the caller sees 90,000), BM25 and the `hash` embedder, 20 timed repetitions:
 
 | | p50 | p95 | p99 |
 | --- | ---: | ---: | ---: |
-| Exact lookup by id | 0.004 ms | 0.005 ms | 0.021 ms |
-| Structural filter | 0.030 ms | 0.040 ms | 0.083 ms |
-| BM25 search | 1.34 ms | 1.61 ms | 1.89 ms |
-| Vector search (`hash`) | 0.87 ms | 0.93 ms | 0.95 ms |
+| Exact lookup by id | 0.004 ms | 0.007 ms | 0.027 ms |
+| Structural filter | 0.029 ms | 0.045 ms | 0.095 ms |
+| BM25 search | 1.52 ms | 2.02 ms | 2.39 ms |
+| Vector search (`hash`) | 0.89 ms | 0.99 ms | 1.14 ms |
 
-Full build 13.2 s, rebuild after changing one file 1.7 s, cold start in-process 20 ms,
+Full build 14.4 s, rebuild after changing one file 1.7 s, cold start in-process 27 ms,
 pack 157.7 MB.

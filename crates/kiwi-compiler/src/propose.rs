@@ -2447,14 +2447,12 @@ mod tests {
     /// `no-drafts` (a draft create is rejected) or `plain`.
     #[cfg(unix)]
     fn stand_in_gh(dir: &Path, mode: &str) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
+        use std::io::Write;
         let script = dir.join("gh");
         let log = dir.join("log");
         let state = dir.join("pr");
-        std::fs::write(
-            &script,
-            format!(
-                r#"#!/bin/sh
+        let body = format!(
+            r#"#!/bin/sh
 echo "$*" >> '{log}'
 case "$1 $2" in
   "pr create")
@@ -2471,12 +2469,20 @@ case "$1 $2" in
 esac
 exit 0
 "#,
-                log = log.display(),
-                state = state.display(),
-            ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            log = log.display(),
+            state = state.display(),
+        );
+        // Written by a child shell, never through a descriptor of this process: a test
+        // thread forking at that moment would carry the open file into its child, and
+        // running the script would then fail with "text file busy".
+        let mut writer = Command::new("sh")
+            .args(["-c", "cat > \"$0\" && chmod 755 \"$0\""])
+            .arg(&script)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        writer.stdin.take().unwrap().write_all(body.as_bytes()).unwrap();
+        assert!(writer.wait().unwrap().success());
         script
     }
 

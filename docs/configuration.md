@@ -160,7 +160,7 @@ refuse when there is none.
 | `kiwi gaps <corpus>` | `--principal <writer>`, `--state <dir>`, `--limit <n>` (100); shows the queries of askers whose view when they asked the writer may read entirely now |
 | `kiwi export <corpus>` | `--format llms-txt` or `jsonl`, `--principal`, `--agent` (default `cli`) |
 | `kiwi gc <corpus>` | `--keep <n>` (default `packs.keep`) |
-| `kiwi audit verify <file>` | `--anchor <hash>` (the expected last hash, to catch truncation); logs of every Kiwi version |
+| `kiwi audit verify <file>` | `--anchor <hash>` (the expected last hash, to catch truncation) |
 | `kiwi audit export <file>` | `--since <seq>` (print the records after this sequence number; default 0, all), `--format jsonl` (the default), `--anchor <hash>`; prints the records as sinks receive them, only after the whole chain verifies; exit code 1 and nothing printed otherwise |
 | `kiwi bench [corpus]` | `--questions`, `--principals`, `--embedder`, `--repeat`, `--synthetic <atoms>`, `--keep-synthetic <dir>`, `--rerank <model>`, `--rerank-top-k <n>`, `--json`, `--baseline <file>` (TOML: `[tolerance]` `quality`, `latency`, `latency_floor_ms`; `[modes.<mode>]` `recall_at_5`, `recall_at_10`, `mrr`, `p95_ms`; `[timings]` `full_build_ms`, `reload_ms`, `cold_start_ms`; `[scale]` `build_ms`, `exact_p95_ms`, `bm25_p95_ms`, `vec_p95_ms`; exit code 1 on a result behind it by more than the tolerance) |
 | `kiwi info` | the version and compiled-in plugins |
@@ -193,8 +193,8 @@ for the paths those owners hold.
 ## Audit records
 
 One JSON object per line of `.kiwi/state/audit.log`, one per call and corpus. A field
-marked *new* was added after Kiwi 0.1.0 and is left out when empty or unset, so older
-records hash as they were written; a record written by Kiwi 0.1.0 has none of them.
+marked *optional* is left out when empty or unset, so a record hashes the same
+whichever of them it carries.
 
 | Field | Type | Present |
 | --- | --- | --- |
@@ -206,15 +206,15 @@ records hash as they were written; a record written by Kiwi 0.1.0 has none of th
 | `namespace` | string | when not empty |
 | `atoms` | array of integers | always; pack uids of `ids`, meaningful in that pack only |
 | `blocked` | integer | always; matches withheld by the policy |
-| `status` | `ok`, `refused` or `failed` | *new*; on every call record |
-| `ids` | array of strings | *new*; when not empty: stable ids of the visible atoms returned (search results, map nodes, read atoms, trace nodes, a resource), named by a feedback, or changed by a proposal (edited sections, roots of documents written, set or deleted), distinct, in answer order; unqualified on a federated server |
-| `docs` | array of strings | *new*; when not empty: the distinct document paths (without `.md`) of `ids` |
-| `results` | integer | *new*; on an `ok` map, search, read, trace or resource: items returned by the whole call |
-| `tokens` | integer | *new*; on every call record: tokens of the body the caller received, answer or message, with the budget's tokenizer |
-| `budget` | integer | *new*; on an `ok` map or search: the token budget applied |
-| `latency_ms` | integer | *new*; on every call record: server time until the record |
-| `queries` | array of strings | *new*; only with `audit.record_requests` and when the call named any |
-| `reference` | string | *new*; on a `failed` record: the reference the caller was given |
+| `status` | `ok`, `refused` or `failed` | *optional*; on every call record |
+| `ids` | array of strings | *optional*; when not empty: stable ids of the visible atoms returned (search results, map nodes, read atoms, trace nodes, a resource), named by a feedback, or changed by a proposal (edited sections, roots of documents written, set or deleted), distinct, in answer order; unqualified on a federated server |
+| `docs` | array of strings | *optional*; when not empty: the distinct document paths (without `.md`) of `ids` |
+| `results` | integer | *optional*; on an `ok` map, search, read, trace or resource: items returned by the whole call |
+| `tokens` | integer | *optional*; on every call record: tokens of the body the caller received, answer or message, with the budget's tokenizer |
+| `budget` | integer | *optional*; on an `ok` map or search: the token budget applied |
+| `latency_ms` | integer | *optional*; on every call record: server time until the record |
+| `queries` | array of strings | *optional*; only with `audit.record_requests` and when the call named any |
+| `reference` | string | *optional*; on a `failed` record: the reference the caller was given |
 | `note` | string | local log only, when there is one: why a proposal was refused or failed, conflicts with hidden content, the cause of a failure; a sink and `kiwi audit export` get `note_mac` (64 hex) instead |
 | `quarantined` | object `{file, bytes, blake3}` | on a quarantine record; a sink gets `{file, mac}` |
 | `prev`, `hash` | string, 64 hex | always |

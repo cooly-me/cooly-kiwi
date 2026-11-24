@@ -255,5 +255,5 @@ keeps serving until the binary is upgraded. Keep the two in step:
   (`systemctl start kiwi-refresh`), switch the path the units run, and restart
   `kiwi.service` once. Check the download's SHA-256 against the release's `.sha256`
   file.
-- Old packs stay readable for pinned citations (`packs.keep`); `kiwi audit verify`
-  checks logs written by every version.
+- Earlier packs stay readable for pinned citations (`packs.keep`), and the audit log
+  goes on with the same chain.
