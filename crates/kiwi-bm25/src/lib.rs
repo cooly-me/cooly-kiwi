@@ -3,7 +3,8 @@
 //! The segment is an rkyv archive read in place from the memory-mapped pack: a term
 //! dictionary (an FST from term to ordinal), and for each term and field a posting list
 //! of (atom uid, term frequency), **partitioned by permission class**. Three fields are
-//! indexed per atom (title, breadcrumb, body) and scored with weights 3.0, 1.5 and 1.0.
+//! indexed per atom (title, breadcrumb, body) and scored with weights 3.0, 1.5 and 1.0,
+//! and length normalisation `b` 0.3, 0.3 and 0.75.
 //!
 //! Governance is structural. A caller's view is a union of permission classes, so a
 //! query reads only the partitions of classes in the view: postings of hidden atoms are
@@ -39,7 +40,11 @@ pub const VERSION: u32 = 2;
 /// Field weights: title, breadcrumb, body.
 pub const FIELD_WEIGHTS: [f32; FIELDS] = [3.0, 1.5, 1.0];
 const K1: f32 = 1.2;
-const B: f32 = 0.75;
+/// Length normalisation by field: title, breadcrumb, body. Titles and breadcrumbs are
+/// a few words long, where the body's 0.75 would let one missing word be outweighed by
+/// a shorter title; 0.3 keeps a title that matches every word of a query above a
+/// shorter one that misses some.
+const FIELD_B: [f32; FIELDS] = [0.3, 0.3, 0.75];
 const MAX_QUERY_TERMS: usize = 32;
 
 fn plugin_err(error: impl std::fmt::Display) -> KiwiError {
@@ -308,8 +313,9 @@ impl Retriever for Bm25Retriever {
                     let n = atoms as f32;
                     let idf = (1.0 + (n - df as f32 + 0.5) / (df as f32 + 0.5)).ln();
                     let weight = idf * (1.0 + K1) * FIELD_WEIGHTS[field];
-                    let norm = K1 * B / average[field].max(f32::MIN_POSITIVE);
-                    let base = K1 * (1.0 - B);
+                    let b = FIELD_B[field];
+                    let norm = K1 * b / average[field].max(f32::MIN_POSITIVE);
+                    let base = K1 * (1.0 - b);
                     for part in parts {
                         let class = part.class.to_native() as usize;
                         let Some(reach) = cover.get(class).copied().flatten() else {

@@ -40,7 +40,9 @@ pub struct EngineConfig {
     pub max_limit: u32,
     /// The `k` of reciprocal rank fusion.
     pub rrf_k: f64,
-    /// Score multiplier for atoms of approved documents.
+    /// Score multiplier for atoms of approved documents. Fused scores near the top
+    /// differ by about 1.6 % per rank (`1 / (rrf_k + rank)`), so 1.02 moves an approved
+    /// atom up by about one place: it breaks near ties, never outranks relevance.
     pub approved_boost: f64,
     /// Hidden-atom display.
     pub hidden: HiddenMode,
@@ -65,7 +67,7 @@ impl Default for EngineConfig {
             default_limit: 10,
             max_limit: 50,
             rrf_k: 60.0,
-            approved_boost: 1.1,
+            approved_boost: 1.02,
             hidden: HiddenMode::Invisible,
         }
     }
