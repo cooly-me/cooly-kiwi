@@ -47,10 +47,10 @@ kb/                          # the corpus root (a repository, or a folder in one
 | `standard` | a rule or reference that stays in force: quality bars, design systems, writing guides, security guarantees, architecture rules | scope, one section per rule or area, exceptions |
 | `glossary` | terms and aliases | one `##` per term |
 
-Lifecycle: `draft -> review -> approved -> deprecated`. Agents rank `approved`
-content higher, flag `draft`/`review` as unapproved, and redirect from `deprecated`
-documents to whatever `supersedes` them. Set `review_by` on everything; overdue
-documents are flagged to agents and to `kiwi lint`.
+Lifecycle: `draft -> review -> approved -> deprecated`. `approved` content wins
+near ties in search, `draft`/`review` content is flagged as unapproved, and
+`deprecated` documents redirect to whatever `supersedes` them. Set `review_by` on
+everything; overdue documents are flagged to agents and to `kiwi lint`.
 
 Pick `standard` for anything that tells people how work must be done and stays in
 force until someone changes it. Do not file it as an approved `rfc` (an RFC is a design

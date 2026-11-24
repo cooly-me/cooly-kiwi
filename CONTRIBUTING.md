@@ -33,7 +33,9 @@ cargo test --no-default-features --features bm25,vec,openai,rerank,wasm,http
 
 The tests build the fixture corpus with the `hash` embedder and run the network
 plugins (embeddings, rerank, audit sinks) against local mock servers, so they need no
-model download and no network. `kiwi bench` with the default configuration downloads the
+model download and no network. The benchmark suite (`bench/run.sh`, described in
+[docs/design.md](docs/design.md#results)) is not part of `cargo test`; CI runs it on
+every release and nightly. `kiwi bench` with the default configuration downloads the
 `multilingual-e5-small` ONNX model once into `~/.cache/kiwi` (override with
 `KIWI_CACHE`).
 
@@ -57,8 +59,11 @@ cp target/wasm32-unknown-unknown/release/kiwi_example_lint.wasm example_lint.was
 - Tool output must stay byte-stable for a given snapshot and request (sorted lists,
   fixed field order, rounded scores).
 - Public items carry rustdoc; library code does not `unwrap()` on input.
-- Run `kiwi bench` before and after changes to ranking and report both tables
-  (`--rerank <model>` adds the reranked mode, `--synthetic 100000` the scale run).
+- Run the benchmark suite before and after changes to ranking, retrieval, builds or
+  serving, and report both outputs: `cargo build --release && bench/run.sh` (a few
+  minutes; `--models` adds the embedding-model and rerank runs). It fails when a result
+  falls behind `bench/baselines/` by more than the tolerances written there; update a
+  baseline in the same pull request as a change that moves it on purpose.
 
 ## Reporting bugs
 

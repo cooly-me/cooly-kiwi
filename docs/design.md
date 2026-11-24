@@ -103,6 +103,21 @@ so no answer mixes a new pack with an old policy. A snapshot without a policy, o
 that fails to load, leaves the previous state serving; a namespace change and rerank
 settings need a restart.
 
+With `--follow`, building is someone else's job (`kiwi build` on a timer, in CI, as
+another user) and the server only reads: it serves the pack its store's `CURRENT`
+names and, each time a build moves `CURRENT`, the new pack with the policy,
+principals and configuration of that pack's own snapshot, swapped in the same way.
+A build writes the pack first and replaces `CURRENT` last, by an atomic rename, so the
+server never sees a pointer to a partial file. Three triggers lead to one idempotent
+check (`kiwi-cli/src/follow.rs`): a file system notification on the store, `SIGHUP`,
+and a re-read every 30 seconds in case a notification is lost; a check that finds the
+served pack current does nothing. Calls in flight finish on the state they took, new
+calls take the new one, and no call waits for or fails because of a swap; the old
+pack's memory map stays valid after `gc` removes its file. A pack of a kind the server
+does not serve (a `dir:` snapshot on a server of commits, or the reverse), or one
+whose snapshot's policy fails to load, is reported on standard error and the previous
+state keeps serving until the next build.
+
 ## The Kiwi Pack
 
 A pack (`kiwi-core/src/pack.rs`, `model.rs`) is one immutable, content-addressed file:
@@ -186,7 +201,7 @@ access: { label: internal, groups: [eng, product] }
   sections define terms, and a first paragraph `Aliases: a, b, c` adds aliases. Terms and
   aliases enter the exact-match dictionary, so synonyms and entity names resolve
   without vectors.
-- **Status** drives ranking and warnings: atoms of `approved` documents rank higher,
+- **Status** drives ranking and warnings: atoms of `approved` documents win near ties,
   `draft` and `review` atoms come with an `unapproved` warning, and `deprecated` atoms
   redirect to their successor.
 - **`review_by`** is compared with the snapshot date; overdue atoms carry a warning.
@@ -382,8 +397,10 @@ hypothetical answer), optional filters, a token budget and a limit. The planner
 2. **Structural.** Filters on `type`, `status`, `owner`, `tags` and `path` intersect
    facet bitmaps with the view. Documents one typed hop away from an exact match
    (through declared relations, not mentions or code links) join as a graph prior.
-3. **Lexical** (`kiwi-bm25`). BM25 (k1 = 1.2, b = 0.75) over title, breadcrumb and
-   body, weighted 3.0, 1.5 and 1.0. Text is cut into alphanumeric runs, lowercased,
+3. **Lexical** (`kiwi-bm25`). BM25 (k1 = 1.2) over title, breadcrumb and body,
+   weighted 3.0, 1.5 and 1.0, with length normalisation b = 0.3, 0.3 and 0.75: titles
+   are a few words long, and the body's 0.75 would rank a shorter title that misses a
+   query word above a longer one that has them all. Text is cut into alphanumeric runs, lowercased,
    folded to ASCII (Lucene's folding table: Vietnamese `thanh toán` matches
    `thanh toan`) and stemmed with the Snowball English stemmer. Postings live in the
    pack as an rkyv segment: an FST from term to ordinal, and per term and field one
@@ -400,7 +417,9 @@ hypothetical answer), optional filters, a token budget and a limit. The planner
    search waits at most 5 s for its query embeddings, with one retry); with the local
    model, embedding the query dominates the latency of this tier.
 5. **Fusion.** Reciprocal rank fusion (`k = 60`) across tiers and queries, weighted by
-   tier (whole-query exact matches highest). Atoms of approved documents get ×1.1. A
+   tier (whole-query exact matches highest). Atoms of approved documents get ×1.02,
+   about one place near the top (fused scores there differ by about 1.6 % a rank), so
+   status breaks near ties and never outranks relevance. A
    deprecated atom is replaced by the matching section of the document that supersedes
    it, unless it was asked for by id, in which case its successor ranks just below it.
 6. **Rerank** (`kiwi-rerank`, off by default). A cross-encoder scores the agent's
@@ -439,7 +458,10 @@ contents. This mode is the baseline every plugin is measured against.
 
 `kiwi serve kb-a kb-b …` serves several corpora from one server. Each keeps its own
 namespace (`namespace` in its `kiwi.toml`; they must differ), pack, policy,
-principals, hidden mode, audit log and feedback. In answers every id is qualified
+principals, hidden mode, audit log and feedback. `--packs <dir>` and `--state <dir>`
+then name parent directories with one directory per namespace (`<dir>/<namespace>`),
+and with `--follow` each store is followed on its own, so each corpus can be rebuilt
+on its own schedule. In answers every id is qualified
 (`acme:adr/adr-005-idempotency-keys#decision`); inputs may be qualified or bare, and a
 bare id must name an atom the caller can see in exactly one corpus.
 
@@ -661,53 +683,83 @@ that do not move.
 
 ## Results
 
-Measured with `kiwi bench` on an **Apple M1 (8 cores, 16 GB), macOS 26.6**, release
-build, in-process (the planner call, without the MCP transport), pack in the page
-cache, while other work ran on the machine. Reproduce with
-`kiwi bench --rerank jina-reranker-v2-base-multilingual` (71 s; 14 s without
-`--rerank`) and `kiwi bench --embedder hash --synthetic 100000` (18 s).
+The benchmark suite, `bench/run.sh`, runs `kiwi bench` on fixed corpora (the example
+corpus, a 10,000-record catalogue generated with seed 7, a 100,000-atom synthetic
+corpus) and measures search quality per mode, latency percentiles of the planner call
+(in-process, without the MCP transport, the pack in the page cache), build times, pack
+sizes and reloads. It takes a few minutes, is separate from `cargo test`, and fails
+when a suite falls behind its baseline in `bench/baselines/` by more than the
+tolerances written there; CI runs it on every release and nightly. `bench/run.sh
+--models` adds the runs with embedding and rerank models, which need a `kiwi` built
+with `fastembed`.
 
-**Example corpus**: 146 atoms, 44 answerable questions and 4 whose answers are hidden
-from the asker, 7 principal/agent pairs; embeddings `multilingual-e5-small`. Latency is
-the p50 of 5 timed runs per question on a warm process; the reranked mode runs each
-question once.
+Latencies and build times below were measured with `bench/run.sh` on an **AMD Ryzen 5
+5600G (6 cores, 12 threads, 27 GB), Ubuntu 22.04.5**, release build of the Linux
+feature set, while other work ran on the machine; quality figures are the same on
+every machine. *recall@k* is the share of a question's answer atoms among the first
+k results; *MRR* the mean reciprocal rank of the first answer among the first ten;
+*tokens / question* the search (or `kiwi_map` for navigation) plus `kiwi_read` of the
+top three atoms at L2, counted with cl100k on the exact JSON returned (for grep, the
+three files with the most query-term hits, read whole).
 
-| Mode | recall@5 | recall@5 (document) | MRR | tokens / question | p50 | leaks |
+**Example corpus** (`fixtures/acme-kb`): 146 atoms, 44 answerable questions and 4 whose
+answers are hidden from the asker, 7 principal and agent pairs. Vectors from the
+`hash` embedder, which needs no model and is not semantic: it is the suite's
+deterministic stand-in for a model.
+
+| Mode | recall@5 | recall@10 | MRR | tokens / question | p50 | p95 | p99 | leaks |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| grep + read 3 files (document level) | 0.989 | 1.000 | 0.828 | 3,722 | 0.53 ms | 0.74 ms | 0.78 ms | 5 |
+| navigation (no index) | 0.621 | 0.621 | 0.491 | 6,002 | 0.032 ms | 0.040 ms | 0.054 ms | 0 |
+| bm25 | 0.848 | 0.947 | 0.677 | 1,721 | 0.036 ms | 0.068 ms | 0.079 ms | 0 |
+| bm25 + vec (`hash`) | 0.773 | 0.856 | 0.689 | 1,724 | 0.13 ms | 0.17 ms | 0.19 ms | 0 |
+
+With models (`bench/run.sh --models`, vectors from `multilingual-e5-small`, the local
+cross-encoder `jina-reranker-v2-base-multilingual` reading 192 tokens of each passage):
+
+| Mode | recall@5 | recall@10 | MRR |
+| --- | ---: | ---: | ---: |
+| bm25 + vec | 0.917 | 0.936 | 0.743 |
+| + rerank of the top 10 (default) | 0.902 | 0.936 | 0.917 |
+| + rerank of the top 20 | 0.932 | 0.966 | 0.909 |
+
+The model modes cost what the models cost on the CPU: a query embedding takes a few
+milliseconds, and the cross-encoder about 0.1 s per passage on a laptop, which is why
+rerank is off by default and, on a GPU server, best used through the HTTP backend
+(TEI, vLLM, Infinity, or a hosted API) with a larger `top_k`. *leaks*: hidden answers
+returned to someone who may not see them (grep has no permissions); the leak suite
+checked 555 responses of every tool for the 7 pairs, with 0 violations. Builds: full
+156 ms, one file changed 66 ms (5 atoms compiled), no change 37 ms (0 compiled, pack
+not rewritten); pack 0.31 MB; reload (policy, pack and retrievers swapped in) 0.40 ms.
+
+**Catalogue** (`bench/catalogue.py`): 10,000 one-record documents of a marketplace's
+services and proposals, in Vietnamese, each a title, a group, a status, tags, a
+one-line summary, a creator, dates and a link. 200 questions each look for a planted
+cluster: a record and one or two rewordings of it by other creators, searched with a
+third wording, a third of the time typed without diacritics. It measures duplicate
+detection among many short, similar records.
+
+| Mode | recall@5 | recall@10 | MRR | p50 | p95 | p99 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| grep + read 3 files | – | 0.989 | 0.828 | 3,722 | 0.55 ms | 5 |
-| navigation (no index) | 0.621 | 0.890 | 0.491 | 6,007 | 0.024 ms | 0 |
-| bm25 | 0.848 | 0.936 | 0.661 | 1,723 | 0.028 ms | 0 |
-| bm25 + vec | 0.917 | 0.958 | 0.743 | 1,783 | 8.5 ms | 0 |
-| + rerank, top 10 × 192 tokens (default) | 0.902 | 0.958 | 0.917 | 1,824 | 1.1 s | 0 |
-| + rerank, top 20 × 256 tokens | **0.943** | **0.977** | **0.943** | 1,825 | 3.0 s | 0 |
+| grep + read 3 files | 0.616 | 0.680 | 0.799 | 9.6 ms | 14.9 ms | 16.9 ms |
+| bm25 | 0.543 | 0.576 | 0.752 | 0.10 ms | 0.20 ms | 0.25 ms |
+| bm25 + vec (`hash`) | 0.364 | 0.531 | 0.491 | 0.33 ms | 0.47 ms | 0.53 ms |
 
-- *tokens / question*: the search (or `kiwi_map` for navigation) plus `kiwi_read` of
-  the top three atoms at L2, counted with cl100k on the exact JSON returned; for grep,
-  the three files with the most query-term hits, read whole. *recall@5 (document)*
-  counts an answer when its document is in the top five, the only recall grep can be
-  scored on. *leaks*: hidden answers returned to someone who may not see them (grep has
-  no permissions). The leak suite separately checked 555 responses of every tool for
-  the 7 pairs: 0 violations.
-- The local cross-encoder (`jina-reranker-v2-base-multilingual`, 278M parameters) costs
-  about 0.1 s per passage on this laptop CPU, so it is off by default and reorders the
-  top 10 locally, where it lifts MRR from 0.743 to 0.917 but not recall@5. On a GPU
-  server, use the
-  HTTP backend (TEI, vLLM, Infinity, or a hosted API) and a larger `top_k`.
-- Builds of the example corpus with the model: full 6.4 s (embedding every atom); no
-  change 21 ms, 0 atoms compiled, pack not rewritten; one file changed 58 ms (5 atoms
-  compiled and re-embedded). The first query that needs vectors loads the model: 0.64 s.
+A rewording that shares no word with the query (`làm MC` for `dẫn chương trình`) is
+out of reach of any lexical method, which bounds recall here; grep ranks by the count
+of query words a whole file holds, summary and tags included, which suits records of
+one line. Builds: full 2.0 s, one file changed 0.44 s, no change 0.52 s; pack 15.2 MB;
+reload 9.6 ms.
 
 **Scale**: 100,000 synthetic atoms (5,000 documents of 20 sections, 10 % confidential;
-the caller sees 90,000), BM25 and the `hash` embedder (no model), 20 timed repetitions
-(`kiwi bench --embedder hash --synthetic 100000`):
+the caller sees 90,000), BM25 and the `hash` embedder, 20 timed repetitions:
 
-| | Measured |
-| --- | ---: |
-| Full build | 12.0 s |
-| Rebuild after changing one file | 1.1 s |
-| Exact lookup by id, p50 / p99 | 0.002 / 0.007 ms |
-| BM25 search, p50 / p99 | 0.90 / 1.07 ms |
-| Vector search (`hash`), p50 / p99 | 0.49 / 0.55 ms |
-| Cold start in-process | 12.4 ms |
-| Pack size | 156.7 MB |
-| Peak memory of the run | 1.76 GB |
+| | p50 | p95 | p99 |
+| --- | ---: | ---: | ---: |
+| Exact lookup by id | 0.004 ms | 0.005 ms | 0.021 ms |
+| Structural filter | 0.030 ms | 0.040 ms | 0.083 ms |
+| BM25 search | 1.34 ms | 1.61 ms | 1.89 ms |
+| Vector search (`hash`) | 0.87 ms | 0.93 ms | 0.95 ms |
+
+Full build 13.2 s, rebuild after changing one file 1.7 s, cold start in-process 20 ms,
+pack 157.7 MB.

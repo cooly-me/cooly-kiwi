@@ -18,7 +18,7 @@
   <a href="#quickstart">Quickstart</a> · <a href="#connect-an-agent">Connect an agent</a> ·
   <a href="#how-it-works">How it works</a> · <a href="#governance">Governance</a> ·
   <a href="#benchmarks">Benchmarks</a> · <a href="docs/design.md">Design</a> ·
-  <a href="docs/configuration.md">Configuration</a>
+  <a href="docs/configuration.md">Configuration</a> · <a href="docs/deploy.md">Deploy</a>
 </p>
 
 ---
@@ -123,8 +123,23 @@ kiwi serve /path/to/kb --http 127.0.0.1:8740 --auth-hs256-env KIWI_TOKEN_SECRET 
 ```
 
 `kiwi serve kb-a kb-b` federates several knowledge bases by namespace, each with its own
-policy and audit log. Key rotation, session limits, `kiwi.toml` and every other option
-are in [docs/configuration.md](docs/configuration.md).
+policy and audit log; `--packs` and `--state` then hold one directory per namespace. In
+production, build on a schedule and let the server follow (here the namespaces are `kb`
+and `catalogue`):
+
+```sh
+kiwi build /srv/kb --packs /var/lib/kiwi/packs/kb                # on a timer, as the builder
+kiwi build /srv/catalogue --packs /var/lib/kiwi/packs/catalogue
+kiwi serve /srv/kb /srv/catalogue --follow \
+  --packs /var/lib/kiwi/packs --state /var/lib/kiwi/state --http 127.0.0.1:8740 …
+```
+
+With `--follow` the server never builds: it serves each store's current pack and swaps
+in every new one with the policy of its snapshot as soon as a build makes it current
+(or on `SIGHUP`). Calls in flight finish on the pack they started with; none fails or
+waits. [docs/deploy.md](docs/deploy.md) sets up a server for a team step by step (the
+timer, proposals as pull requests, tokens, several corpora, audit, upgrades); every
+option is in [docs/configuration.md](docs/configuration.md).
 
 ## How it works
 
@@ -195,24 +210,23 @@ and does not protect.
 
 ## Benchmarks
 
-`kiwi bench` scores the bundled corpus: 146 atoms, 44 answerable questions and 4 whose
-answers are hidden from the asker, 7 principal and agent pairs, embeddings from
-`multilingual-e5-small`. Measured on an Apple M1 (8 cores, 16 GB), macOS 26.6, release
-build, in-process (without the MCP transport); p50 over 5 warm runs per question, one
-run for the reranked mode.
+`bench/run.sh` is the benchmark suite: search quality, latency percentiles, build and
+reload times and pack sizes on fixed corpora, checked against `bench/baselines/` on
+every release. On the bundled corpus (146 atoms, 44 answerable questions and 4 whose
+answers are hidden from the asker, 7 principal and agent pairs):
 
-| Mode | recall@5 | MRR | p50 |
-| --- | ---: | ---: | ---: |
-| bm25 | 0.848 | 0.661 | 0.028 ms |
-| bm25 + vectors | 0.917 | 0.743 | 8.5 ms |
-| bm25 + vectors + local rerank of the top 10 | 0.902 | 0.917 | 1.1 s |
+| Mode | recall@5 | recall@10 | MRR | p95 |
+| --- | ---: | ---: | ---: | ---: |
+| bm25 | 0.848 | 0.947 | 0.677 | 0.068 ms |
+| bm25 + vectors (`multilingual-e5-small`) | 0.917 | 0.936 | 0.743 | the query embedding |
+| bm25 + vectors + local rerank of the top 10 | 0.902 | 0.936 | 0.917 | about 0.1 s a passage |
 
-None of these modes returned a hidden answer, and the bench's leak checks found 0
-violations in 555 responses. Reproduce with
-`kiwi bench --rerank jina-reranker-v2-base-multilingual` from the repository root. On
-the same machine, a synthetic corpus of 100,000 atoms with BM25 and the `hash` embedder
-built in 12.0 s, rebuilt after a one-file change in 1.1 s and answered a BM25 search in
-0.90 ms at p50 (`kiwi bench --embedder hash --synthetic 100000`).
+None of these modes returned a hidden answer; the leak checks found 0 violations in 555
+responses. A catalogue of 10,000 short records answers a BM25 search in 0.20 ms at p95
+and swaps in a new pack in 10 ms; 100,000 synthetic atoms build in 13 s, rebuild after
+a one-file change in 1.7 s and answer a BM25 search in 1.6 ms at p95 (AMD Ryzen 5
+5600G, Ubuntu 22.04, release build, in-process). [docs/design.md](docs/design.md#results)
+has every table, the machines and the commands.
 
 ## Skills for agents
 

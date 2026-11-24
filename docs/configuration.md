@@ -152,7 +152,7 @@ refuse when there is none.
 | Command | Flags |
 | --- | --- |
 | `kiwi build <corpus>` | `--embedder <name>` (`hash` needs no model), `--no-bm25`, `--no-vec`, `--as-of <YYYY-MM-DD>`, `--json` |
-| `kiwi serve <corpus>...` | several corpora federate by namespace (`--rev` and `--packs` with one only); `--embedder`, `--no-bm25`, `--no-vec`; `--principal` (stdio), `--agent` (default `local-agent`); `--state <dir>`; `--no-audit`; `--watch` (with `--worktree` rebuilds the working files when one changes; otherwise rebuilds `HEAD` when it or a branch moves, so commits stay what is served; not with `--rev`) |
+| `kiwi serve <corpus>...` | several corpora federate by namespace (`--rev` with one only); `--embedder`, `--no-bm25`, `--no-vec`; `--principal` (stdio), `--agent` (default `local-agent`); `--packs <dir>` and `--state <dir>` (with several corpora, each corpus uses `<dir>/<namespace>`); `--no-audit`; `--watch` (with `--worktree` rebuilds the working files when one changes; otherwise rebuilds `HEAD` when it or a branch moves, so commits stay what is served; not with `--rev`); `--follow` (never builds: serves the pack each store's `CURRENT` names and every pack a `kiwi build` elsewhere makes current, with its snapshot's policy, on a change to the store, on `SIGHUP` and every 30 seconds; not with `--watch` or `--rev`) |
 | `kiwi serve` over HTTP | `--http <addr>`; one of `--auth-hs256-env <VAR>`, `--auth-rs256-pem <file>`, `--auth-jwks <file>` (key files are re-read when their content changes; each key is taken on its own; an empty set revokes all keys; a missing or broken file keeps the keys and is reported), or `--insecure-principal <user>` (loopback only, the `insecure` channel); `--issuer <url>` (required), `--resource <url>` (the token audience; default `http://<addr>/mcp`), `--allowed-host <host>` (repeatable; default localhost), `--max-sessions <n>` (1,024) |
 | `kiwi query <corpus> <tool> [json]` | `--principal` (default `anonymous`), `--agent` (default `cli`) |
 | `kiwi lint <corpus>` | `--json`; exit code 1 on errors |
@@ -162,7 +162,7 @@ refuse when there is none.
 | `kiwi gc <corpus>` | `--keep <n>` (default `packs.keep`) |
 | `kiwi audit verify <file>` | `--anchor <hash>` (the expected last hash, to catch truncation); logs of every Kiwi version |
 | `kiwi audit export <file>` | `--since <seq>` (print the records after this sequence number; default 0, all), `--format jsonl` (the default), `--anchor <hash>`; prints the records as sinks receive them, only after the whole chain verifies; exit code 1 and nothing printed otherwise |
-| `kiwi bench [corpus]` | `--questions`, `--principals`, `--embedder`, `--repeat`, `--synthetic <atoms>`, `--keep-synthetic <dir>`, `--rerank <model>`, `--rerank-top-k <n>`, `--json` |
+| `kiwi bench [corpus]` | `--questions`, `--principals`, `--embedder`, `--repeat`, `--synthetic <atoms>`, `--keep-synthetic <dir>`, `--rerank <model>`, `--rerank-top-k <n>`, `--json`, `--baseline <file>` (TOML: `[tolerance]` `quality`, `latency`, `latency_floor_ms`; `[modes.<mode>]` `recall_at_5`, `recall_at_10`, `mrr`, `p95_ms`; `[timings]` `full_build_ms`, `reload_ms`, `cold_start_ms`; `[scale]` `build_ms`, `exact_p95_ms`, `bm25_p95_ms`, `vec_p95_ms`; exit code 1 on a result behind it by more than the tolerance) |
 | `kiwi info` | the version and compiled-in plugins |
 
 ## Proposals
