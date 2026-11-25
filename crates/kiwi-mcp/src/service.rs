@@ -28,7 +28,10 @@ use kiwi_core::api::{
     AuditFacts, BudgetUse, ContextItem, HiddenItem, Link, MapNode, MapRequest, MapResponse, ReadRequest,
     ReadResponse, SearchRequest, SearchResponse, TraceRequest, TraceResponse, Warning,
 };
-use kiwi_core::{Engine, EngineConfig, RankedAtom, View, fit_budget, text};
+use kiwi_core::api::{Level, ReadItem};
+use kiwi_core::{
+    Engine, EngineConfig, RankedAtom, ReadBudget, View, check_read_ids, cover_queries, fit_budget, text,
+};
 use kiwi_policy::{AuditStatus, Identity};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -421,6 +424,14 @@ impl KiwiService {
         &self.corpora
     }
 
+    /// The budgets and limits of a request that names none: the first corpus's, which
+    /// lead a federated answer whenever the caller can see that corpus.
+    pub fn defaults(&self) -> EngineConfig {
+        self.corpora
+            .first()
+            .map_or_else(EngineConfig::default, |corpus| *corpus.engine().config())
+    }
+
     /// Ships what every corpus's audit sinks still hold and stops them; called when the
     /// server stops (the local audit logs are already complete).
     pub fn shutdown(&self) {
@@ -796,12 +807,12 @@ impl KiwiService {
         }
         let lead = lead(scoped);
         let settings = lead.map_or_else(EngineConfig::default, |index| *scoped[index].engine.config());
-        let budget = settings.budget(req.budget);
-        let limit = settings.limit(req);
+        let budget = settings.search_budget(req);
+        let limit = settings.search_limit(req);
         // The lead corpus's settings apply to every corpus: each ranks as deep as the
         // lead would.
         let req = &SearchRequest {
-            limit: Some(limit as u32),
+            limit: Some(u32::try_from(settings.query_limit(req)).unwrap_or(u32::MAX)),
             ..req.clone()
         };
         let mut facts = vec![AuditFacts::default(); scoped.len()];
@@ -837,8 +848,6 @@ impl KiwiService {
         });
         let total = merged.len();
         let reranker = lead.and_then(|index| scoped[index].served.federation_reranker(index));
-        let head = reranker.map_or(limit, |r| limit.max(r.top_k()));
-        merged.truncate(head);
         if let (Some(attached), Some(lead)) = (reranker, lead) {
             // The lead corpus's reranker reads the merged top; each atom only when its
             // own corpus's policy lets that reranker read it. A failure keeps the order.
@@ -870,6 +879,7 @@ impl KiwiService {
                 }
             }
         }
+        cover_queries(&mut merged, limit, |(_, item)| item.queries);
         merged.truncate(limit);
         let mut costs = Vec::with_capacity(merged.len());
         for (index, item) in &merged {
@@ -941,7 +951,7 @@ impl KiwiService {
         }
         let budget = lead(scoped)
             .map_or_else(EngineConfig::default, |index| *scoped[index].engine.config())
-            .budget(req.budget);
+            .map_budget(req.budget);
         let scope = req.scope.as_deref().map(str::trim).unwrap_or("");
         // `ns:rest` (or `ns:` / `ns`) maps one corpus; anything else maps every corpus
         // the caller can read, each with an equal share of the budget.
@@ -1026,22 +1036,31 @@ impl KiwiService {
     fn read(&self, scoped: &[Scoped], req: &ReadRequest) -> Result<Answer, ToolError> {
         if !self.federated() {
             let (response, facts) = scoped[0].engine.read(&scoped[0].view, req)?;
-            return Answer::new(&response, vec![facts], None, response.atoms.len());
+            return Answer::new(
+                &response,
+                vec![facts],
+                Some(response.budget.limit),
+                response.atoms.len(),
+            );
         }
-        if req.ids.is_empty() {
-            return Err(ToolError::Invalid("ids must not be empty".into()));
-        }
-        if req.ids.len() > 20 {
-            return Err(ToolError::Invalid("at most 20 ids per read".into()));
-        }
+        check_read_ids(req)?;
+        let level = req.level.unwrap_or(Level::L2);
+        let context = req.context.unwrap_or_default();
+        // One budget over every corpus read, the lead corpus's.
+        let mut budget = ReadBudget::new(
+            lead(scoped)
+                .map_or_else(EngineConfig::default, |index| *scoped[index].engine.config())
+                .read_budget(req.budget),
+        );
+        let mut seen = vec![BTreeSet::new(); scoped.len()];
         let mut facts = vec![AuditFacts::default(); scoped.len()];
         let mut atoms = Vec::new();
-        let mut seen = BTreeSet::new();
         let mut not_found = Vec::new();
         let mut hidden = Vec::new();
         let mut warnings = BTreeSet::new();
         let mut redacted: Option<u32> = None;
-        for asked in &req.ids {
+        let mut more = None;
+        for (position, asked) in req.ids.iter().enumerate() {
             let (index, local) = match self.locate(scoped, asked)? {
                 Located::Found(index, local) => (index, local),
                 Located::Missing => {
@@ -1050,51 +1069,52 @@ impl KiwiService {
                 }
             };
             let scope = &scoped[index];
-            let request = ReadRequest {
-                ids: vec![local.to_owned()],
-                level: req.level,
-                context: req.context,
+            let after = match (position, req.after.as_deref()) {
+                (0, Some(after)) => Some(self.unqualify(index, after)),
+                _ => None,
             };
-            let (response, corpus_facts) = scope.engine.read(&scope.view, &request)?;
-            facts[index].blocked += corpus_facts.blocked;
-            if let Some(count) = response.redacted {
-                *redacted.get_or_insert(0) += count;
+            let step = scope.engine.read_step(
+                &scope.view,
+                local,
+                after,
+                level,
+                context,
+                &mut budget,
+                &mut seen[index],
+            )?;
+            facts[index].blocked += step.blocked;
+            facts[index].atoms.extend(step.atoms.iter().copied());
+            if scope.engine.config().hidden == kiwi_core::HiddenMode::Stub {
+                *redacted.get_or_insert(0) += step.redacted;
             }
-            not_found.extend(response.not_found.iter().map(|_| asked.clone()));
-            hidden.extend(response.hidden.into_iter().map(|item| HiddenItem {
+            if step.not_found {
+                not_found.push(asked.clone());
+            }
+            hidden.extend(step.hidden.map(|item| HiddenItem {
                 id: asked.clone(),
                 ..item
             }));
-            warnings.extend(
-                response
-                    .warnings
-                    .into_iter()
-                    .map(|w| self.qualify_warning(index, w)),
-            );
-            for (mut item, uid) in response.atoms.into_iter().zip(corpus_facts.atoms) {
-                item.id = self.qualify(index, &item.id);
-                if !seen.insert(item.id.clone()) {
-                    continue;
+            warnings.extend(step.warnings.into_iter().map(|w| self.qualify_warning(index, w)));
+            if let Some(item) = step.item {
+                atoms.push(self.qualify_item(index, scope.engine.pack().snapshot(), item));
+            }
+            if let Some(cut) = step.cut {
+                let mut rest = cut.into_more(req, position);
+                rest.left_out = rest.left_out.iter().map(|id| self.qualify(index, id)).collect();
+                rest.next.after = rest.next.after.map(|id| self.qualify(index, &id));
+                for later in &req.ids[position + 1..] {
+                    let (sections, tokens) = match self.locate(scoped, later)? {
+                        Located::Found(at, local) => {
+                            scoped[at]
+                                .engine
+                                .read_size(&scoped[at].view, local, level, &seen[at])?
+                        }
+                        Located::Missing => (0, 0),
+                    };
+                    rest.add(later, sections, tokens);
                 }
-                item.cite = format!("kiwi://atom/{}@{}", item.id, scope.engine.pack().snapshot());
-                item.links = item
-                    .links
-                    .into_iter()
-                    .map(|link| Link {
-                        rel: link.rel,
-                        id: self.qualify(index, &link.id),
-                    })
-                    .collect();
-                item.context = item
-                    .context
-                    .into_iter()
-                    .map(|c| ContextItem {
-                        id: self.qualify(index, &c.id),
-                        ..c
-                    })
-                    .collect();
-                facts[index].atoms.push(uid);
-                atoms.push(item);
+                more = Some(rest);
+                break;
             }
         }
         let (snapshot, snapshots) = self.snapshots(scoped);
@@ -1106,8 +1126,50 @@ impl KiwiService {
             hidden,
             warnings: warnings.into_iter().collect(),
             redacted,
+            budget: budget.usage(),
+            more,
         };
-        Answer::new(&response, facts, None, response.atoms.len())
+        Answer::new(
+            &response,
+            facts,
+            Some(response.budget.limit),
+            response.atoms.len(),
+        )
+    }
+
+    /// An atom read from corpus `index` (at `snapshot`), with every id in it qualified.
+    fn qualify_item(&self, index: usize, snapshot: &str, mut item: ReadItem) -> ReadItem {
+        item.id = self.qualify(index, &item.id);
+        item.cite = format!("kiwi://atom/{}@{snapshot}", item.id);
+        item.links = item
+            .links
+            .into_iter()
+            .map(|link| Link {
+                rel: link.rel,
+                id: self.qualify(index, &link.id),
+            })
+            .collect();
+        item.context = item
+            .context
+            .into_iter()
+            .map(|c| ContextItem {
+                id: self.qualify(index, &c.id),
+                ..c
+            })
+            .collect();
+        item.sections = item
+            .sections
+            .iter()
+            .map(|section| self.qualify(index, section))
+            .collect();
+        item
+    }
+
+    /// An id of corpus `index` without its namespace, when it carries one.
+    fn unqualify<'a>(&self, index: usize, id: &'a str) -> &'a str {
+        id.strip_prefix(self.corpora[index].namespace())
+            .and_then(|rest| rest.strip_prefix(':'))
+            .unwrap_or(id)
     }
 
     fn trace(&self, scoped: &[Scoped], req: &TraceRequest) -> Result<Answer, ToolError> {
@@ -1424,21 +1486,17 @@ impl KiwiService {
             .resolve_id(&canonical)?
             .filter(|uid| view.contains(*uid))
             .ok_or_else(missing)?;
-        if scope
-            .served
-            .hides_any_paragraph(&pinned.body(then)?, &scope.classes)?
-        {
+        // One atom's own text, whatever sections follow it: a citation names exactly it.
+        let text = pinned.body(then)?;
+        if scope.served.hides_any_paragraph(&text, &scope.classes)? {
             return Err(missing());
         }
-        let request = ReadRequest {
-            ids: vec![canonical],
-            level: Some(kiwi_core::api::Level::L2),
-            context: None,
+        let facts = AuditFacts {
+            atoms: vec![then],
+            ..AuditFacts::default()
         };
-        let (response, facts) = engine.read(&view, &request)?;
-        let atom = response.atoms.into_iter().next().ok_or_else(missing)?;
         Ok((
-            atom.text,
+            text,
             Part {
                 index,
                 engine,

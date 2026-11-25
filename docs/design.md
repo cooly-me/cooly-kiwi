@@ -15,6 +15,7 @@ configuration key, file format and flag is listed in [configuration.md](configur
 - [Documents, metadata and the typed graph](#documents-metadata-and-the-typed-graph)
 - [Governance compiled into the index](#governance-compiled-into-the-index)
 - [The retrieval cascade](#the-retrieval-cascade)
+- [Budgets](#budgets)
 - [Federation](#federation)
 - [Writes through Git](#writes-through-git)
 - [The plugin model](#the-plugin-model)
@@ -33,7 +34,9 @@ These principles settle design arguments.
    answer: memory-mapped reads, bitmap operations and small scans.
 3. **Tokens are the unit of cost.** An agent's turn costs seconds and thousands of
    tokens. Saving a millisecond matters less than saving a few thousand tokens of
-   context, so every response is cut to a token budget.
+   context, so every response is cut to a token budget. A budget is sized for the work,
+   not for thrift: an answer too small to use sends the agent to read the files, and
+   loses the governance and citations Kiwi exists for.
 4. **The agent is the brain; the engine is a cheap sense.** No generative model runs in
    the query path. Query expansion and the final choice of what to read are left to the
    calling agent, which is already a capable model; the only models a query may touch
@@ -272,7 +275,7 @@ intersection:
   allow-list: an agent the directory does not list, and an HTTP token that names no
   client, get the directory's `default_agent` grant, which is empty unless set
   (`default_agent: { labels: [public] }`);
-- the labels the **session** was granted (OAuth scopes `kiwi:label:<label>`).
+- the labels the **token** was granted (OAuth scopes `kiwi:label:<label>`).
 
 An agent never sees more than the person it acts for. The OR of the permitted classes'
 bitmaps is the caller's **view**, and every retrieval tier works inside it:
@@ -326,8 +329,21 @@ rotate without a restart. A missing key file keeps the keys and is reported loud
 one that does not parse is skipped and reported. A valid file with no key revokes every
 key; a broken one (unreadable, not a key file, every key refused) leaves the previous
 keys and is reported as an error on standard error at every check until it is fixed.
-At start, a key file needs at least one usable key. Sessions are capped (`--max-sessions`, 1,024; a new one beyond it gets `503`)
-and close after five idle minutes. It does not issue tokens.
+At start, a key file needs at least one usable key. It does not issue tokens.
+
+**Stateless HTTP.** `/mcp` serves Streamable HTTP without sessions: every POST carries
+its token, is authenticated and answered on its own, as one `application/json` body;
+`GET` and `DELETE` answer `405`. Every tool is a request and a response, and the caller's
+identity comes from the token of each request, so a session would hold nothing Kiwi
+needs, while it would bring two failure modes long agent work hits: an idle limit (an
+agent that thinks or writes for minutes between calls finds its session gone and its
+next calls refused with `404`, which clients do not all recover from) and a cap on
+sessions held at once. Without sessions there is nothing to expire or exhaust, a
+restart breaks no connected client, and any instance behind a load balancer can answer
+any request. An `Mcp-Session-Id` header a client still sends is ignored. The audit
+records each call with its identity and needs no session id. The `initialize` handshake
+is answered (without a session) for clients that send it, and is not required before a
+call.
 
 **Audit.** Every tool call and resource read, answered, refused or failed, appends
 one JSON line to an append-only log: who, which agent and channel, which tool, corpus
@@ -386,7 +402,7 @@ carries the MCP protocol.
 </picture>
 
 `kiwi_search` takes up to 8 queries written by the agent (keywords, synonyms, ids, a
-hypothetical answer), optional filters, a token budget and a limit. The planner
+hypothetical answer), optional filters, a token budget and a limit, both for each query. The planner
 (`kiwi-core/src/engine.rs`) runs its tiers from cheap to expensive:
 
 1. **Exact.** Each whole query, and each window of up to four words in it, is looked up
@@ -417,7 +433,9 @@ hypothetical answer), optional filters, a token budget and a limit. The planner
    search waits at most 5 s for its query embeddings, with one retry); with the local
    model, embedding the query dominates the latency of this tier.
 5. **Fusion.** Reciprocal rank fusion (`k = 60`) across tiers and queries, weighted by
-   tier (whole-query exact matches highest). Atoms of approved documents get ×1.02,
+   tier (whole-query exact matches highest). Every list is credited to the query that
+   produced it (a glossary expansion to the query that matched the term), and each
+   query's own three best atoms (`QUERY_FLOOR`) are marked. Atoms of approved documents get ×1.02,
    about one place near the top (fused scores there differ by about 1.6 % a rank), so
    status breaks near ties and never outranks relevance. A
    deprecated atom is replaced by the matching section of the document that supersedes
@@ -432,9 +450,14 @@ hypothetical answer), optional filters, a token budget and a limit. The planner
    reads only atoms the policy lets it read (others keep their positions) and is
    bounded by a timeout; on a failure or a timeout the fused order stands and the
    response says `degraded` (tier `rerank`).
-7. **Budget cut.** Of the top `limit` results (default 10), every result that fits gets
-   its L0, breadth first; then the best get their L1 while the budget (default 800
-   tokens) lasts. The response reports how many results were omitted.
+7. **Budget cut.** The search keeps its `limit` for each query times the number of
+   queries, in fused order, except that a query's own three best found below that cut
+   take the places of the lowest kept atoms that are no query's own best: fusion
+   favours what several queries agree on, which suits synonyms of one question, and the
+   floor keeps a query about something else from being crowded out. Every kept result
+   that fits gets its L0, breadth first; then the best get their L1 while the budget
+   (for each query, times the number of queries) lasts. The response reports how many
+   results were omitted.
 
 A retriever that fails (an embedding API that is down) does not fail the search: the
 other tiers answer, the response carries a `degraded` warning, and it is not cached.
@@ -454,6 +477,34 @@ cache hits when it repeats a call.
 scope within a budget and `kiwi_read` opens atoms, the way a person reads a table of
 contents. This mode is the baseline every plugin is measured against.
 
+## Budgets
+
+Every answer is cut to a token budget, counted with cl100k. A request may name its own
+(`budget`, at least 50); when it names none, the corpus's `kiwi.toml` default applies,
+and when that names none, the constant in `kiwi-core/src/engine.rs`. No answer exceeds
+`MAX_BUDGET`, 32,000 tokens. The defaults are sized for agents doing long research, and
+the tool descriptions state them, so a model knows it can ask for more:
+
+| Tool | Default | Why |
+| --- | --- | --- |
+| `kiwi_map` | 4,000 tokens (`map.budget`) | The titles of about 150 documents: one call orients in a corpus or a folder |
+| `kiwi_search` | 1,000 tokens and 10 results for each query (`search.budget`, `search.limit`) | Ten results with their abstracts per query; a search of five queries is as deep as five searches |
+| `kiwi_read` | 12,000 tokens of text (`read.budget`) | A few long documents whole, under the 25,000-token ceiling Claude Code puts on a tool's output by default |
+
+**Reads are whole and never cut silently.** At L2, an id is read with everything under
+it: a document with all its sections, a section with its subsections (and the parts a
+long section was split into), in document order, leaving out any section hidden from
+the caller with everything under it. The item's `sections` lists the atoms its text
+holds, each citable. Sections are given whole while the budget lasts; the first section
+of an answer always is, whatever its size, so reading on always progresses. When the
+budget runs out the answer carries `more`: how many sections and tokens were left out,
+`left_out` (the highest sections left out, each readable whole by its id, then the ids
+not reached), and `next`, the exact arguments of the `kiwi_read` that reads on (the
+same ids from the one cut, and `after`, the last section given). Reading on is
+stateless: `after` names a section, so it needs no cursor and stays valid as long as
+that section exists. An answer without `more` is whole. The `kiwi://atom` resource
+stays one atom: a citation names exactly one section.
+
 ## Federation
 
 `kiwi serve kb-a kb-b …` serves several corpora from one server. Each keeps its own
@@ -468,11 +519,12 @@ bare id must name an atom the caller can see in exactly one corpus.
 - **Search** ranks each corpus inside the caller's view of that corpus (BM25
   statistics included), merges the rankings by fused score, reranks the merged top
   with the first corpus's reranker (each atom only if its own corpus's policy lets the
-  reranker read it) and cuts to one budget. The first corpus's search settings apply.
+  reranker read it), keeps each query's own best, and cuts to one budget. The first
+  corpus's search settings apply.
 - **Map** without a scope lists one node per corpus the caller can read (`acme:`),
   each with an equal share of the budget; `acme:` or `acme:product/` maps one corpus.
 - **Read, trace, the atom resource** resolve each id in its corpus; a trace stays
-  inside it. Citations name the corpus's own snapshot; responses carry `snapshot` (an
+  inside it, and a read spends one budget (the first corpus's) over every corpus. Citations name the corpus's own snapshot; responses carry `snapshot` (an
   id over the corpora the caller can read) and `snapshots` (one per such corpus).
 - **The atom resource** (`kiwi://atom/{id}@{rev}`, one corpus or several) needs the id
   to name an atom of the current pack in the caller's view, and returns the same atom's
@@ -654,8 +706,8 @@ agent's context, and fewer tools are chosen correctly more often.
 | Tool | Main input | Returns |
 | --- | --- | --- |
 | `kiwi_map` | `scope`, `depth`, `budget` | The L0/L1 tree of a scope, to orient |
-| `kiwi_search` | `queries[]`, `filters`, `budget`, `limit` | Ranked atoms at L1 or L0, why they matched, their status |
-| `kiwi_read` | `ids[]`, `level`, `context` | L2 (or L0/L1) text, typed links, optional parent, siblings and children |
+| `kiwi_search` | `queries[]`, `filters`, `budget`, `limit` | Ranked atoms at L1 or L0, why they matched, their status; every query answered |
+| `kiwi_read` | `ids[]`, `level`, `context`, `budget`, `after` | Whole documents or sections at L2 (or L0/L1), typed links, optional parent, siblings and children; `more` when the budget cut it |
 | `kiwi_trace` | `id`, `relation`, `direction`, `depth` | A walk of the typed graph |
 | `kiwi_propose` | `changes[]`, `rationale`, `title` | The branch and pull request, whether review is needed, lint findings |
 | `kiwi_feedback` | `query`, `ids`, `verdict` | Records the verdict; `missing` feeds the knowledge-gap queue |
@@ -678,7 +730,8 @@ that do not move.
 | Audit | the local hash-chained log; no sink; requests not recorded (`audit.record_requests`) |
 | Agents not in `principals.yaml` | no labels (`default_agent`) |
 | Packs kept | 10, the current one included (`packs.keep`) |
-| HTTP sessions | at most 1,024, closed after five idle minutes |
+| Answer budgets | map 4,000 tokens; search 1,000 tokens and 10 results for each query; read 12,000 tokens; at most 32,000 |
+| HTTP sessions | none: stateless, every request answered on its own |
 | Token counting | cl100k via `tiktoken-rs`, used to fit budgets |
 
 ## Results
@@ -698,8 +751,8 @@ Latencies and build times below were measured with `bench/run.sh` on an **AMD Ry
 feature set, while other work ran on the machine; quality figures are the same on
 every machine. *recall@k* is the share of a question's answer atoms among the first
 k results; *MRR* the mean reciprocal rank of the first answer among the first ten;
-*tokens / question* the search (or `kiwi_map` for navigation) plus `kiwi_read` of the
-top three atoms at L2, counted with cl100k on the exact JSON returned (for grep, the
+*tokens / question* the search with its default budget (or `kiwi_map` for navigation)
+plus `kiwi_read` of the top three results at L2, each with its subsections, counted with cl100k on the exact JSON returned (for grep, the
 three files with the most query-term hits, read whole).
 
 **Example corpus** (`fixtures/acme-kb`): 146 atoms, 44 answerable questions and 4 whose
@@ -710,9 +763,9 @@ deterministic stand-in for a model.
 | Mode | recall@5 | recall@10 | MRR | tokens / question | p50 | p95 | p99 | leaks |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | grep + read 3 files (document level) | 0.989 | 1.000 | 0.828 | 3,722 | 0.53 ms | 0.80 ms | 0.86 ms | 5 |
-| navigation (no index) | 0.621 | 0.621 | 0.491 | 6,002 | 0.031 ms | 0.049 ms | 0.064 ms | 0 |
-| bm25 | 0.848 | 0.947 | 0.677 | 1,721 | 0.038 ms | 0.075 ms | 0.109 ms | 0 |
-| bm25 + vec (`hash`) | 0.773 | 0.856 | 0.689 | 1,724 | 0.14 ms | 0.19 ms | 0.24 ms | 0 |
+| navigation (no index) | 0.621 | 0.621 | 0.491 | 7,135 | 0.029 ms | 0.032 ms | 0.038 ms | 0 |
+| bm25 | 0.848 | 0.947 | 0.677 | 2,980 | 0.049 ms | 0.091 ms | 0.100 ms | 0 |
+| bm25 + vec (`hash`) | 0.773 | 0.856 | 0.689 | 2,987 | 0.15 ms | 0.20 ms | 0.21 ms | 0 |
 
 With models (`bench/run.sh --models`, vectors from `multilingual-e5-small`, the local
 cross-encoder `jina-reranker-v2-base-multilingual` reading 192 tokens of each passage):

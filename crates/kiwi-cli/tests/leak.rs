@@ -627,6 +627,7 @@ fn hidden_content_cannot_change_any_answer() {
                 ids: reads.clone(),
                 level: Some(Level::L2),
                 context,
+                ..Default::default()
             };
             let a = serde_json::to_string(&full_engine.read(&full_view, &request).unwrap().0).unwrap();
             let b =
@@ -784,6 +785,7 @@ fn adversarial_declarations_are_enforced() {
                 ids: vec![(*id).to_owned()],
                 level: Some(Level::L2),
                 context: Some(kiwi_core::api::ReadContext::Children),
+                ..Default::default()
             };
             let opened = serde_json::to_string(&engine.read(&view, &read).unwrap().0).unwrap();
             if !expected {

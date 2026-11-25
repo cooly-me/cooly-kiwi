@@ -300,6 +300,7 @@ fn read_top(engine: &Engine, view: &View, ids: &[String]) -> Result<usize> {
             ids: ids.iter().take(3).cloned().collect(),
             level: Some(Level::L2),
             context: None,
+            ..Default::default()
         },
     )?;
     Ok(count_tokens(&serde_json::to_string(&response)?) as usize)
@@ -734,6 +735,7 @@ fn check_leaks(
                     ids: chunk.to_vec(),
                     level: Some(Level::L2),
                     context: Some(kiwi_core::api::ReadContext::Children),
+                    ..Default::default()
                 },
             )?;
             // `not_found` echoes the caller's own request (hidden and absent ids are

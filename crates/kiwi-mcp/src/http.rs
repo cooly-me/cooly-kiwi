@@ -5,7 +5,7 @@
 //! `WWW-Authenticate` header pointing at it.
 //!
 //! Claims map to an [`Identity`]: `sub` is the user, `client_id` (or `azp`) the agent,
-//! and `kiwi:label:<label>` scopes, when present, limit the session to those labels. A
+//! and `kiwi:label:<label>` scopes, when present, limit the call to those labels. A
 //! token must carry `kiwi:read` or at least one `kiwi:label:` scope; a token that names
 //! no client acts through [`UNIDENTIFIED_AGENT`], which only the directory's
 //! `default_agent` grant covers.
@@ -29,7 +29,7 @@ use axum::routing::get;
 use jsonwebtoken::jwk::{AlgorithmParameters, EllipticCurve, PublicKeyUse};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use kiwi_policy::{Identity, UNIDENTIFIED_AGENT};
-use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use serde::Deserialize;
 
@@ -598,41 +598,30 @@ async fn resource_metadata(State(auth): State<HttpAuth>) -> Response {
     }
 }
 
-/// Sessions held at once; a new one beyond it is refused (`503`) until an old one
-/// closes or idles out (five minutes without a request).
-pub const MAX_SESSIONS: usize = 1024;
-
 /// The axum router: `/mcp` behind authentication, the metadata document, `/healthz`.
+///
+/// `/mcp` is stateless Streamable HTTP: every POST is authenticated and answered on its
+/// own, and no session is created, so there is nothing to expire between calls however
+/// long an agent works without calling, and nothing to exhaust. An `Mcp-Session-Id` a
+/// client still sends is ignored. Each answer is one JSON body (`application/json`);
+/// `GET` (a server-to-client stream) and `DELETE` (ending a session) answer `405`, as
+/// the transport allows a server that offers neither.
 pub fn router(service: Arc<KiwiService>, auth: HttpAuth, allowed_hosts: Vec<String>) -> Router {
-    router_with_sessions(service, auth, allowed_hosts, MAX_SESSIONS)
-}
-
-/// [`router`] with another cap on the sessions held at once.
-pub fn router_with_sessions(
-    service: Arc<KiwiService>,
-    auth: HttpAuth,
-    allowed_hosts: Vec<String>,
-    max_sessions: usize,
-) -> Router {
-    let mut config = StreamableHttpServerConfig::default();
+    let mut config = StreamableHttpServerConfig::default()
+        .with_legacy_session_mode(false)
+        .with_json_response(true);
     if allowed_hosts.is_empty() {
         config = config.disable_allowed_hosts();
     } else {
         config = config.with_allowed_hosts(allowed_hosts);
     }
-    let sessions = Arc::new(LocalSessionManager::default());
     let mcp = StreamableHttpService::new(
         move || Ok(KiwiServer::new(Arc::clone(&service), IdentitySource::Request)),
-        Arc::clone(&sessions),
+        Arc::new(NeverSessionManager::default()),
         config,
     );
-    let limit = SessionLimit {
-        sessions,
-        max: max_sessions,
-    };
     Router::new()
         .route_service("/mcp", mcp)
-        .route_layer(middleware::from_fn_with_state(limit, limit_sessions))
         .route_layer(middleware::from_fn_with_state(auth.clone(), authenticate))
         // The metadata at the well-known path and at it followed by any resource path,
         // so the URL a challenge names exists whatever path the resource has.
@@ -640,31 +629,6 @@ pub fn router_with_sessions(
         .route(&format!("{METADATA_PATH}/{{*resource}}"), get(resource_metadata))
         .route("/healthz", get(|| async { "ok" }))
         .with_state(auth)
-}
-
-#[derive(Clone)]
-struct SessionLimit {
-    sessions: Arc<LocalSessionManager>,
-    max: usize,
-}
-
-/// Refuses a request that would open a session (a POST without `Mcp-Session-Id`) while
-/// the server holds as many as it may.
-async fn limit_sessions(State(limit): State<SessionLimit>, request: Request, next: Next) -> Response {
-    let opens =
-        request.method() == axum::http::Method::POST && !request.headers().contains_key("mcp-session-id");
-    if opens && limit.sessions.sessions.read().await.len() >= limit.max {
-        tracing::warn!(
-            max = limit.max,
-            "session limit reached; a new session was refused"
-        );
-        let mut response = (StatusCode::SERVICE_UNAVAILABLE, "too many sessions").into_response();
-        response
-            .headers_mut()
-            .insert(header::RETRY_AFTER, HeaderValue::from_static("60"));
-        return response;
-    }
-    next.run(request).await
 }
 
 /// Resolves when the process is asked to stop: Ctrl-C, or SIGTERM (what service

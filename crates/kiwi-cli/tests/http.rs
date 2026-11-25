@@ -1,6 +1,6 @@
 //! Streamable HTTP with OAuth 2.1 bearer tokens: 401 with a resource-metadata challenge,
-//! the protected-resource metadata, token validation, and on-behalf-of narrowing by
-//! token scopes and by the HTTP channel.
+//! the protected-resource metadata, token validation, on-behalf-of narrowing by token
+//! scopes and by the HTTP channel, and calls answered without a session.
 
 #![cfg(feature = "http")]
 #![allow(clippy::unwrap_used, clippy::zombie_processes)]
@@ -24,6 +24,7 @@ const ISSUER: &str = "https://issuer.test";
 struct Server {
     child: Child,
     base: String,
+    port: u16,
 }
 
 impl Drop for Server {
@@ -34,15 +35,16 @@ impl Drop for Server {
 }
 
 fn start(corpus: &Corpus) -> Server {
-    start_with(corpus, &[])
-}
-
-fn start_with(corpus: &Corpus, extra: &[&str]) -> Server {
     let port = std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
         .unwrap()
         .port();
+    start_on(corpus, port)
+}
+
+/// Starts the server on `port` (one a stopped server used, to restart it).
+fn start_on(corpus: &Corpus, port: u16) -> Server {
     let base = format!("http://127.0.0.1:{port}");
     let child = Command::new(KIWI)
         .args([
@@ -57,7 +59,6 @@ fn start_with(corpus: &Corpus, extra: &[&str]) -> Server {
             "--resource",
             &format!("{base}/mcp"),
         ])
-        .args(extra)
         .env("KIWI_TEST_SECRET", SECRET)
         .current_dir(&corpus.root)
         .stdout(Stdio::null())
@@ -66,7 +67,7 @@ fn start_with(corpus: &Corpus, extra: &[&str]) -> Server {
         .unwrap();
     for _ in 0..200 {
         if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            return Server { child, base };
+            return Server { child, base, port };
         }
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -245,46 +246,65 @@ async fn bearer_tokens_gate_the_mcp_endpoint() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn sessions_are_bounded() {
+async fn calls_need_no_session() {
     let corpus = Corpus::copy();
     corpus.build(&[]);
-    let server = start_with(&corpus, &["--max-sessions", "1"]);
+    let server = start(&corpus);
     let resource = format!("{}/mcp", server.base);
-    let config = StreamableHttpClientTransportConfig::with_uri(resource.clone()).auth_header(token(
-        "fiona",
-        "kiwi:read",
-        &resource,
-    ));
-    let first = ().serve(StreamableHttpClientTransport::from_config(config)).await.unwrap();
-    // A second session is refused while the first is open.
-    let initialize = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}"#;
-    let response = reqwest::Client::new()
-        .post(&resource)
-        .bearer_auth(token("fiona", "kiwi:read", &resource))
-        .header("content-type", "application/json")
-        .header("accept", "application/json, text/event-stream")
-        .body(initialize)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 503);
-    // Closing it frees the slot.
-    first.cancel().await.unwrap();
-    let mut freed = false;
-    for _ in 0..50 {
-        let config = StreamableHttpClientTransportConfig::with_uri(resource.clone()).auth_header(token(
-            "fiona",
-            "kiwi:read",
-            &resource,
-        ));
-        if let Ok(client) = ().serve(StreamableHttpClientTransport::from_config(config)).await {
-            client.cancel().await.unwrap();
-            freed = true;
-            break;
+    let bearer = token("fiona", "kiwi:read", &resource);
+    let http = reqwest::Client::new();
+    let post = |body: &'static str, session: Option<&'static str>| {
+        let mut request = http
+            .post(&resource)
+            .bearer_auth(&bearer)
+            .header("content-type", "application/json")
+            .header("accept", "application/json, text/event-stream")
+            .body(body);
+        if let Some(session) = session {
+            request = request.header("mcp-session-id", session);
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        request.send()
+    };
+
+    // The handshake is answered without opening a session.
+    let initialize = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}"#;
+    let response = post(initialize, None).await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert!(response.headers().get("mcp-session-id").is_none());
+
+    // A call with no handshake before it, and one carrying a session id the server
+    // never issued (what a client holds after a long idle gap or a server restart),
+    // are both answered like any other.
+    let call = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"kiwi_search","arguments":{"queries":["pricing"]}}}"#;
+    for session in [None, Some("a-session-from-long-ago")] {
+        let response = post(call, session).await.unwrap();
+        assert_eq!(response.status(), 200, "{session:?}");
+        let answer: serde_json::Value = serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
+        let text = answer["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            text.contains("product/checkout/prd#pricing"),
+            "{session:?}: {answer}"
+        );
     }
-    assert!(freed, "the slot was not freed");
+
+    // A connected client keeps working across a restart of the server: nothing it
+    // holds can go stale.
+    let config = StreamableHttpClientTransportConfig::with_uri(resource.clone()).auth_header(bearer.clone());
+    let client = ().serve(StreamableHttpClientTransport::from_config(config)).await.unwrap();
+    let ask = || {
+        CallToolRequestParams::new("kiwi_search")
+            .with_arguments(json!({"queries": ["pricing"]}).as_object().unwrap().clone())
+    };
+    assert!(client.call_tool(ask()).await.is_ok());
+    let port = server.port;
+    drop(server);
+    let _restarted = start_on(&corpus, port);
+    let result = client.call_tool(ask()).await.unwrap();
+    let text = result.content[0].as_text().unwrap().text.clone();
+    assert!(text.contains("product/checkout/prd#pricing"), "{text}");
+    client.cancel().await.unwrap();
 }
 
 #[test]

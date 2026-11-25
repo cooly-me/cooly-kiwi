@@ -8,10 +8,6 @@ max_tokens = 800
 hidden = "invisible"
 bm25_stats = "strict"
 
-[search]
-budget = 800
-limit = 10
-
 [plugins.bm25]
 enabled = true
 

@@ -11,8 +11,15 @@
 //! hidden = "invisible"      # or "stub"
 //! bm25_stats = "strict"     # or "global"
 //!
+//! [map]
+//! budget = 4000             # tokens of a kiwi_map answer
+//!
 //! [search]
-//! budget = 800
+//! budget = 1000             # tokens for each query of a kiwi_search
+//! limit = 10                # results for each query
+//!
+//! [read]
+//! budget = 12000            # tokens of text of a kiwi_read answer
 //!
 //! [plugins.bm25]
 //! enabled = true
@@ -101,21 +108,53 @@ impl Default for GovernanceConfig {
     }
 }
 
-/// Search defaults.
+/// `kiwi_map` defaults.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MapConfig {
+    /// Token budget of an answer when the request names none.
+    pub budget: u32,
+}
+
+impl Default for MapConfig {
+    fn default() -> Self {
+        Self {
+            budget: kiwi_core::DEFAULT_MAP_BUDGET,
+        }
+    }
+}
+
+/// `kiwi_search` defaults, for each query of a search.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SearchConfig {
-    /// Default token budget.
+    /// Token budget for each query when the request names none.
     pub budget: u32,
-    /// Default number of results considered before the budget cut.
+    /// Results for each query before the budget cut when the request names none.
     pub limit: u32,
 }
 
 impl Default for SearchConfig {
     fn default() -> Self {
         Self {
-            budget: 800,
-            limit: 10,
+            budget: kiwi_core::DEFAULT_SEARCH_BUDGET,
+            limit: kiwi_core::DEFAULT_SEARCH_LIMIT,
+        }
+    }
+}
+
+/// `kiwi_read` defaults.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ReadConfig {
+    /// Token budget of an answer's text when the request names none.
+    pub budget: u32,
+}
+
+impl Default for ReadConfig {
+    fn default() -> Self {
+        Self {
+            budget: kiwi_core::DEFAULT_READ_BUDGET,
         }
     }
 }
@@ -527,8 +566,12 @@ pub struct KiwiConfig {
     pub atoms: AtomConfig,
     /// Governance.
     pub governance: GovernanceConfig,
-    /// Search defaults.
+    /// `kiwi_map` defaults.
+    pub map: MapConfig,
+    /// `kiwi_search` defaults.
     pub search: SearchConfig,
+    /// `kiwi_read` defaults.
+    pub read: ReadConfig,
     /// Plugins.
     pub plugins: PluginsConfig,
     /// Proposal forge.
@@ -545,7 +588,9 @@ impl Default for KiwiConfig {
             namespace: "default".into(),
             atoms: AtomConfig::default(),
             governance: GovernanceConfig::default(),
+            map: MapConfig::default(),
             search: SearchConfig::default(),
+            read: ReadConfig::default(),
             plugins: PluginsConfig::default(),
             forge: ForgeConfig::default(),
             audit: AuditConfig::default(),

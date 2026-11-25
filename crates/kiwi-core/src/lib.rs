@@ -18,6 +18,10 @@ pub mod plugin;
 pub mod rerank;
 pub mod text;
 
-pub use engine::{BudgetFit, Engine, EngineConfig, HiddenMode, RankedAtom, Ranking, View, fit_budget};
+pub use engine::{
+    BudgetFit, DEFAULT_MAP_BUDGET, DEFAULT_READ_BUDGET, DEFAULT_SEARCH_BUDGET, DEFAULT_SEARCH_LIMIT, Engine,
+    EngineConfig, HiddenMode, MAX_BUDGET, MAX_QUERIES, MAX_READ_IDS, MAX_SEARCH_LIMIT, MIN_BUDGET, QueryMask,
+    RankedAtom, Ranking, ReadBudget, ReadCut, ReadStep, View, check_read_ids, cover_queries, fit_budget,
+};
 pub use error::{KiwiError, Result};
 pub use pack::{DEFAULT_KEEP_PACKS, GcReport, Pack, PackBytes, PackStore, StoreLock, StoredPack};

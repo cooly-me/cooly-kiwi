@@ -167,7 +167,7 @@ fn every_tool_records_tokens_ids_and_documents() {
         assert_eq!(cached[key], record[key], "{key}");
     }
 
-    // kiwi_read: what was returned; a hidden id is only counted.
+    // kiwi_read: every section whose text was returned; a hidden id is only counted.
     let text = service
         .call(
             &alice,
@@ -175,12 +175,15 @@ fn every_tool_records_tokens_ids_and_documents() {
             json!({"ids": ["ADR-005", "finance/budget-2027"]}),
         )
         .unwrap();
+    let answer: Value = serde_json::from_str(&text).unwrap();
     let record = last(root);
     assert_call(&record, "kiwi_read", "ok", &text);
-    assert_eq!(strings(&record["ids"]), ["adr/adr-005-idempotency-keys"]);
+    let sections = strings(&answer["atoms"][0]["sections"]);
+    assert!(sections.len() > 1, "{answer}");
+    assert_eq!(strings(&record["ids"]), sections);
     assert_eq!(strings(&record["docs"]), ["adr/adr-005-idempotency-keys"]);
     assert_eq!((&record["results"], &record["blocked"]), (&json!(1), &json!(1)));
-    assert!(record.get("budget").is_none());
+    assert_eq!(record["budget"], answer["budget"]["limit"]);
 
     // kiwi_trace: every node; code paths are no atoms.
     let text = service

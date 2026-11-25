@@ -149,8 +149,8 @@ printf '%s.%s.%s\n' "$header" "$claims" "$signature"
 
 `aud` is the resource URL the server is started with, `sub` a user of
 `principals.yaml`, `azp` an agent of it, and `scope` either `kiwi:read` or
-`kiwi:label:<label>` scopes that narrow the session to those labels. The agent sends
-it as `Authorization: Bearer <token>`.
+`kiwi:label:<label>` scopes that narrow every call made with it to those labels. The
+agent sends it as `Authorization: Bearer <token>`.
 
 `/etc/systemd/system/kiwi.service`:
 
@@ -179,6 +179,30 @@ WantedBy=multi-user.target
 `systemctl reload kiwi` makes the server check its stores at once. Behind a reverse
 proxy with TLS, use the public URL as `--resource` and in `aud`, and list its host with
 `--allowed-host`.
+
+The endpoint is stateless: each request carries its token and is answered on its own,
+as one JSON body. There is no session to idle out, so an agent that works for an hour
+between two calls is answered like any other, and a restart of the server (a release,
+a `Restart=on-failure`) breaks no connected agent. A proxy needs no sticky routing and
+no streaming support.
+
+**Answer sizes.** A request may name its own token budget; when it names none, Kiwi
+uses these defaults, which suit long research by agents and stay under the
+25,000-token tool-output ceiling of common MCP clients. Set them in the corpus's
+`.kiwi/kiwi.toml` only to change them:
+
+```toml
+[map]
+budget = 4000    # tokens of a kiwi_map answer
+[search]
+budget = 1000    # tokens for each query of a kiwi_search (the answer: this times its queries)
+limit = 10       # results for each query
+[read]
+budget = 12000   # tokens of text of a kiwi_read answer; whole documents, cut section by
+                 # section with a `more` that says how to read on
+```
+
+Every answer is at most 32,000 tokens, whatever is asked.
 
 **Rotating the key.** The public key file is re-read when its content changes, and
 each key in it is tried. Append the new public key to `jwt-public.pem`, sign new

@@ -37,11 +37,13 @@ set `"namespace": "acme"` on the request. Paths stay relative to that corpus
 ## Before writing
 
 1. **Find what exists.** Search (`kiwi_search`) and read the documents you are about to
-   change, so your proposal starts from the current text and does not duplicate a
-   section that already exists under another name. Note the snapshot.
-2. **Read what you will change.** Read the target sections at L2 (`kiwi_read`), and the
-   document root with `context: "children"` to see its structure. For a section change
-   you only need that section; to add a section to an existing document, rewrite the
+   change, through Kiwi only (never a copy of the files), so your proposal starts from
+   the current text and does not duplicate a section that already exists under another
+   name. Note the snapshot.
+2. **Read what you will change.** Read the document whole (`kiwi_read` of its id gives
+   every section; its `sections` list is the structure, and an answer with `more` was
+   cut: call `kiwi_read` with `more.next` to read on). For a section change you only
+   need that section; to add a section to an existing document, rewrite the
    body of the section it should follow and append the new `## Heading {#anchor}` and
    its text at the end of that body. A body, and a whole file, must close every code
    block and HTML block they open.

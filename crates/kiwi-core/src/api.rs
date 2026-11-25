@@ -61,9 +61,12 @@ impl Filters {
 pub struct MapRequest {
     /// An atom id or a path prefix (`adr/`, `product`); empty for the whole corpus.
     pub scope: Option<String>,
-    /// Tree depth below the scope: 1 lists documents, 2 adds their top sections.
+    /// Tree depth below the scope: 1 lists documents, 2 (the default) adds their top
+    /// sections.
     pub depth: Option<u8>,
-    /// Token budget for the answer (default 800).
+    /// Token budget of the answer (its default and maximum are in the tool's
+    /// description). Raise it to see more of a large scope; `omitted` counts what did
+    /// not fit.
     pub budget: Option<u32>,
 }
 
@@ -72,14 +75,18 @@ pub struct MapRequest {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(default, deny_unknown_fields)]
 pub struct SearchRequest {
-    /// One or more queries written by the agent: keywords, synonyms, ids or a one-line
-    /// hypothetical answer. Results of all queries are fused.
+    /// Queries written by the agent, several in one call: keywords, synonyms, ids or a
+    /// one-line hypothetical answer. Results of all queries are fused, and every query
+    /// that matches anything has at least one result.
     pub queries: Vec<String>,
     /// Structural filters.
     pub filters: Filters,
-    /// Token budget for the answer (default 800).
+    /// Token budget for each query; the answer gets this times the number of queries
+    /// (the default and the maximum are in the tool's description). Raise it for more
+    /// abstracts and results.
     pub budget: Option<u32>,
-    /// Maximum number of results before the budget cut (default 20).
+    /// Results for each query before the budget cut (the default and the maximum are
+    /// in the tool's description).
     pub limit: Option<u32>,
 }
 
@@ -104,12 +111,24 @@ pub enum ReadContext {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(default, deny_unknown_fields)]
 pub struct ReadRequest {
-    /// Atom ids (`path#anchor`), document paths or document ids (`ADR-005`).
+    /// Atom ids (`path#anchor`), document paths or document ids (`ADR-005`). At L2 each
+    /// is read whole: a document with all its sections, a section with all its
+    /// subsections.
     pub ids: Vec<String>,
     /// Zoom level (default L2, the full text).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub level: Option<Level>,
     /// Neighbouring sections to list.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<ReadContext>,
+    /// Token budget of the text (the default and the maximum are in the tool's
+    /// description). What does not fit is left out section by section, and `more` says
+    /// how to read it; raise the budget to get more in one answer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget: Option<u32>,
+    /// Continue the first id's text after this section: copy it from `more.next`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
 }
 
 /// Direction of a graph walk.
@@ -330,6 +349,25 @@ pub struct ReadItem {
     /// Neighbouring sections.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub context: Vec<ContextItem>,
+    /// When `text` holds more than the atom's own section (its subsections, or the rest
+    /// of a text continued with `after`): the sections it holds, in order. Each is cited
+    /// as `kiwi://atom/{section}@{snapshot}`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<String>,
+}
+
+/// What a `kiwi_read` left out for its budget, and how to read it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReadMore {
+    /// Sections left out.
+    pub sections: u32,
+    /// Their tokens.
+    pub tokens: u32,
+    /// The highest sections left out, each read whole by its id: the rest of the text
+    /// cut short, then the ids not reached.
+    pub left_out: Vec<String>,
+    /// The `kiwi_read` arguments that read on from where this answer stops.
+    pub next: ReadRequest,
 }
 
 /// A hidden atom shown as a stub (only with `hidden = "stub"`).
@@ -368,6 +406,12 @@ pub struct ReadResponse {
     /// Number of hidden atoms (only with `hidden = "stub"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub redacted: Option<u32>,
+    /// Token use of the text.
+    pub budget: BudgetUse,
+    /// Present when the budget cut the answer short: what was left out and how to read
+    /// it. Absent, the answer is whole.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub more: Option<ReadMore>,
 }
 
 /// A node of a trace.

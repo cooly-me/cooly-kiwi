@@ -475,10 +475,8 @@ fn a_hidden_first_corpus_sets_no_search_setting() {
     build(&acme.root);
     let tuned = hidden_corpus("aaa", "invisible");
     let path = tuned.root.join(".kiwi/kiwi.toml");
-    let config = std::fs::read_to_string(&path)
-        .unwrap()
-        .replace("budget = 800", "budget = 60")
-        .replace("limit = 10", "limit = 1");
+    let config = std::fs::read_to_string(&path).unwrap()
+        + "\n[map]\nbudget = 60\n\n[search]\nbudget = 60\nlimit = 1\n\n[read]\nbudget = 60\n";
     std::fs::write(&path, config).unwrap();
     let plain = hidden_corpus("aaa", "invisible");
     let open = |root: &Path, reranker: Option<Arc<dyn kiwi_core::plugin::Reranker>>| {
@@ -518,6 +516,7 @@ fn a_hidden_first_corpus_sets_no_search_setting() {
         ),
         ("kiwi_search", json!({"queries": ["vision"], "budget": 4000})),
         ("kiwi_map", json!({"depth": 2})),
+        ("kiwi_read", json!({"ids": ["acme:product/checkout/prd"]})),
     ] {
         let a = call(&with_tuned, &alice, tool, args.clone()).map(|t| without_snapshots(&t));
         let b = call(&with_plain, &alice, tool, args.clone()).map(|t| without_snapshots(&t));
@@ -533,7 +532,11 @@ fn a_hidden_first_corpus_sets_no_search_setting() {
         .unwrap(),
     )
     .unwrap();
-    assert_eq!(answer["budget"]["limit"], 800, "{answer}");
+    assert_eq!(
+        answer["budget"]["limit"],
+        kiwi_core::DEFAULT_SEARCH_BUDGET,
+        "{answer}"
+    );
     assert!(answer["results"].as_array().unwrap().len() > 1, "{answer}");
 }
 

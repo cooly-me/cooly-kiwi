@@ -127,7 +127,9 @@ async fn search_is_budgeted_governed_and_byte_stable() {
     assert_eq!(a, b, "same process, same bytes");
     assert_eq!(a, c, "another process, same bytes");
     let search = json(&a);
-    assert!(search["budget"]["used"].as_u64().unwrap() <= 600);
+    // The budget is for each query.
+    assert_eq!(search["budget"]["limit"], 1200);
+    assert!(search["budget"]["used"].as_u64().unwrap() <= 1200);
     let ids: Vec<&str> = search["results"]
         .as_array()
         .unwrap()

@@ -35,7 +35,7 @@ may not read never reaches their agent: not in results, not in snippets, not in 
 - **Permissions are compiled into the index and applied before ranking.** `KIWIOWNERS`,
   frontmatter and heading attributes become permission classes, each a bitmap of
   sections. A [Cedar](https://www.cedarpolicy.com/) policy picks the classes that the
-  user, the agent's grant and the session may all read, and every retrieval tier runs
+  user, the agent's grant and the token's scopes may all read, and every retrieval tier runs
   inside that view. BM25 computes its statistics from the view alone.
 - **One immutable pack per commit, pinned in every answer.** A build reads a commit's
   tree without a checkout and writes one content-addressed, memory-mapped pack. Every
@@ -43,8 +43,9 @@ may not read never reaches their agent: not in results, not in snippets, not in 
   request return the same bytes.
 - **Atoms, zoom levels and token budgets.** Each heading-bounded section is an atom with
   an L0 (title and breadcrumb), an L1 (an abstract) and an L2 (the full text), each with
-  a token count. Agents read a map first, open only what they need, and every response
-  is cut to a budget.
+  a token count. Agents map, search, then read whole documents; every answer is cut to a
+  budget the agent may raise, and a read the budget cut says what it left out and how
+  to read on.
 - **Writes are pull requests, governed like reads.** `kiwi_propose` commits to a new
   branch, lints the result and opens a pull request. The policy decides who may propose
   a change to each section and who may merge without review, and a proposal is judged
@@ -80,10 +81,10 @@ kiwi query fixtures/acme-kb kiwi_search \
   "results": [
     { "id": "glossary#idempotency-key", "level": "L1", "title": "GLOSSARY · Glossary › Idempotency key",
       "summary": "A unique value the client generates once per logical write operation and sends with every retry of it.",
-      "status": "approved", "score": 0.1368, "why": ["bm25", "exact", "vec"] },
-    // … 9 more
+      "status": "approved", "score": 0.1268, "why": ["bm25", "exact", "vec"] },
+    // … 19 more: 10 for each query
   ],
-  "omitted": 67, "budget": { "limit": 800, "used": 610 },
+  "omitted": 57, "budget": { "limit": 2000, "used": 1189 },
   "warnings": [ { "kind": "redirected", "id": "adr/adr-003-sync-capture#decision", "to": "adr/adr-007-async-capture#decision" } ]
 }
 ```
@@ -93,9 +94,28 @@ exists; Fiona, in finance, reads it:
 
 ```sh
 kiwi query fixtures/acme-kb kiwi_read '{"ids": ["product/checkout/prd#pricing"]}' --principal alice
-# {"snapshot":"7615fc5…","atoms":[],"not_found":["product/checkout/prd#pricing"]}
+# {"snapshot":"7615fc5…","atoms":[],"not_found":["product/checkout/prd#pricing"],"budget":{"limit":12000,"used":0}}
 kiwi query fixtures/acme-kb kiwi_read '{"ids": ["product/checkout/prd#pricing"]}' --principal fiona
 kiwi query fixtures/acme-kb kiwi_trace '{"id": "PRD-001", "depth": 2}' --principal alice  # PRD → ADRs → code
+```
+
+A read gives whole documents. When its budget cuts one short, the answer says what it
+left out and how to read on:
+
+```sh
+kiwi query fixtures/acme-kb kiwi_read '{"ids": ["ADR-005"], "budget": 300}' --principal alice
+```
+
+```jsonc
+{
+  "atoms": [ { "id": "adr/adr-005-idempotency-keys", "tokens": 267,
+    "sections": ["adr/adr-005-idempotency-keys", "adr/adr-005-idempotency-keys#context"], /* text, cite, links */ } ],
+  "budget": { "limit": 300, "used": 267 },
+  "more": { "sections": 3, "tokens": 503,
+    "left_out": ["adr/adr-005-idempotency-keys#decision", "adr/adr-005-idempotency-keys#consequences",
+                 "adr/adr-005-idempotency-keys#alternatives"],
+    "next": { "ids": ["ADR-005"], "budget": 300, "after": "adr/adr-005-idempotency-keys#context" } }
+}
 ```
 
 ## Connect an agent
@@ -164,14 +184,25 @@ audit log. [docs/design.md](docs/design.md) has the full design and its reasons.
 | Tool | Main input | Returns |
 | --- | --- | --- |
 | `kiwi_map` | `scope`, `depth`, `budget` | The L0/L1 tree of a scope (an atom id, a path prefix or a namespace) |
-| `kiwi_search` | `queries[]`, `filters`, `budget`, `limit` | Ranked atoms at L1 or L0, why they matched, their status |
-| `kiwi_read` | `ids[]`, `level`, `context` | L2 (or L0/L1) text, typed links, optional parent, siblings and children |
+| `kiwi_search` | `queries[]`, `filters`, `budget`, `limit` | Ranked atoms at L1 or L0, why they matched, their status; every query answered |
+| `kiwi_read` | `ids[]`, `level`, `context`, `budget`, `after` | Whole documents or sections at L2 (or L0/L1), typed links, optional parent, siblings and children; `more` when the budget cut it |
 | `kiwi_trace` | `id`, `relation`, `direction`, `depth` | A walk of the typed graph, e.g. PRD → RFC → ADR → code |
 | `kiwi_propose` | `changes[]`, `rationale`, `title` | The branch and pull request, whether review is needed, lint findings |
 | `kiwi_feedback` | `query`, `ids`, `verdict` | Records useful, wrong or missing; `missing` feeds `kiwi gaps` |
 
 Responses carry `warnings` where they apply (overdue review, unapproved, deprecated,
 redirected, degraded); `kiwi://atom/{id}@{rev}` returns one atom at a pinned snapshot.
+
+When a request names no budget, Kiwi sizes answers for long research: a map gets 4,000
+tokens, a search 1,000 tokens and 10 results for each of its queries (each query also
+keeps its own best three), and a read 12,000 tokens of text, whole documents first. No
+answer exceeds 32,000 tokens. A read the budget cut carries `more`: the sections left
+out and `next`, the arguments of the `kiwi_read` that reads on. The defaults are set in
+`.kiwi/kiwi.toml` (`map.budget`, `search.budget`, `search.limit`, `read.budget`;
+[docs/configuration.md](docs/configuration.md)).
+
+Over HTTP the endpoint is stateless: every request is authenticated and answered on its
+own, so there is no session to expire, however long an agent works between calls.
 
 ## Governance
 

@@ -216,8 +216,10 @@ fn document_root(pack: &Pack, path: &str) -> Result<Option<u32>, ToolError> {
 /// Engine settings from the corpus configuration.
 pub fn engine_config(config: &KiwiConfig) -> EngineConfig {
     EngineConfig {
-        default_budget: config.search.budget,
-        default_limit: config.search.limit,
+        map_budget: config.map.budget,
+        search_budget: config.search.budget,
+        search_limit: config.search.limit,
+        read_budget: config.read.budget,
         hidden: config.governance.hidden,
         ..EngineConfig::default()
     }

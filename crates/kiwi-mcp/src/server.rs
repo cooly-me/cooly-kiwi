@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use kiwi_core::api::{MapRequest, ReadRequest, SearchRequest, TraceRequest};
+use kiwi_core::{EngineConfig, MAX_BUDGET, MAX_QUERIES, MAX_READ_IDS, MAX_SEARCH_LIMIT};
 use kiwi_policy::Identity;
 use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{
@@ -18,10 +19,13 @@ use rmcp::{ErrorData, RoleServer, ServerHandler};
 
 use crate::service::{FeedbackRequest, KiwiService, ProposeRequest, ToolError};
 
-const INSTRUCTIONS: &str = "Kiwi serves a governed knowledge base compiled from Markdown in Git. \
-Orient with kiwi_map, find with kiwi_search (pass several short queries: keywords, synonyms, ids), \
-open only what you need with kiwi_read, follow why-chains with kiwi_trace. Every answer is pinned to \
-a snapshot; cite kiwi://atom/{id}@{snapshot}. When a server federates several corpora, ids are \
+const INSTRUCTIONS: &str = "Kiwi serves a governed knowledge base compiled from Markdown in Git; \
+take its facts from Kiwi, not from a copy of the files, so every one is cited. Orient with kiwi_map, \
+find with kiwi_search (several short queries in one call: keywords, synonyms, ids; each query gets \
+its own results), then read whole documents with kiwi_read. Budgets are parameters: raise `budget` \
+when an answer is too small. A read the budget cut has `more`: call kiwi_read with `more.next` to \
+read on. Follow why-chains with kiwi_trace. Every answer is pinned to a snapshot; cite \
+kiwi://atom/{id}@{snapshot} (a read's `cite`). When a server federates several corpora, ids are \
 namespace:id and each corpus's snapshot is in `snapshots`. Report gaps with kiwi_feedback; change \
 knowledge only through kiwi_propose (it opens a branch and a pull request).";
 
@@ -69,7 +73,7 @@ pub struct KiwiServer {
 
 fn tool<T: schemars::JsonSchema + std::any::Any>(
     name: &'static str,
-    description: &'static str,
+    description: impl Into<std::borrow::Cow<'static, str>>,
     read_only: bool,
 ) -> Tool {
     let annotations = if read_only {
@@ -80,22 +84,32 @@ fn tool<T: schemars::JsonSchema + std::any::Any>(
     Tool::new(name, description, schema_for_type::<T>()).with_annotations(annotations)
 }
 
-/// The six tools, in a fixed order.
-pub fn tools() -> Vec<Tool> {
+/// The six tools, in a fixed order, describing the budgets and limits a request gets
+/// when it names none (`defaults`).
+pub fn tools(defaults: &EngineConfig) -> Vec<Tool> {
     vec![
         tool::<MapRequest>(
             "kiwi_map",
-            "Table of contents (L0 titles, L1 abstracts) of a scope: an atom id or a path prefix such as `adr/`. Use it to orient before reading.",
+            format!(
+                "Table of contents (L0 titles, L1 abstracts) of a scope: an atom id, a path prefix such as `adr/`, or nothing for the whole corpus. Use it to orient before searching. `budget` is the answer's tokens (default {}, at most {MAX_BUDGET}); `omitted` counts what did not fit.",
+                defaults.map_budget
+            ),
             true,
         ),
         tool::<SearchRequest>(
             "kiwi_search",
-            "Ranked atoms (sections) for one or more queries you write: keywords, synonyms, ids or a one-line hypothetical answer. High-ranked results carry an L1 abstract, the rest an L0 title, within a token budget (default 800). Filters: type (vision, prd, rfc, adr, runbook, standard, glossary), status, owner, tags, path, namespace.",
+            format!(
+                "Ranked atoms (sections) for 1-{MAX_QUERIES} queries you write, best in one call: keywords, synonyms, ids or a one-line hypothetical answer. Each query gets `limit` results (default {}, at most {MAX_SEARCH_LIMIT}) and `budget` tokens (default {}; the answer at most {MAX_BUDGET}), and every query that matches has at least one result. High-ranked results carry an L1 abstract, the rest an L0 title; `omitted` counts what did not fit. Filters: type (vision, prd, rfc, adr, runbook, standard, glossary), status, owner, tags, path, namespace. Then read what you need with kiwi_read.",
+                defaults.search_limit, defaults.search_budget
+            ),
             true,
         ),
         tool::<ReadRequest>(
             "kiwi_read",
-            "Full text (L2, default) or L0/L1 of atoms by id (`path#anchor`, a document path, or a document id such as ADR-005), with typed links and optional parent/siblings/children.",
+            format!(
+                "Full text of up to {MAX_READ_IDS} atoms by id (`path#anchor`, a document path, or a document id such as ADR-005): a document comes whole with all its sections, a section with its subsections, within `budget` tokens of text (default {}, at most {MAX_BUDGET}). When the budget cuts the answer it has `more`: what was left out, and `next`, the exact arguments of the kiwi_read that reads on (or raise `budget`). Without `more` the answer is whole. `level` L0/L1 gives titles or abstracts instead; typed links and optional parent/siblings/children come with each atom. Cite an atom by its `cite`.",
+                defaults.read_budget
+            ),
             true,
         ),
         tool::<TraceRequest>(
@@ -152,11 +166,13 @@ impl ServerHandler for KiwiServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult::with_all_items(tools()))
+        Ok(ListToolsResult::with_all_items(tools(&self.service.defaults())))
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
-        tools().into_iter().find(|tool| tool.name == name)
+        tools(&self.service.defaults())
+            .into_iter()
+            .find(|tool| tool.name == name)
     }
 
     async fn call_tool(

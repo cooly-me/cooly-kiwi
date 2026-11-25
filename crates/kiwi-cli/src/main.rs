@@ -283,10 +283,6 @@ struct ServeArgs {
     /// again when it changes.
     #[arg(long)]
     auth_jwks: Option<PathBuf>,
-    /// HTTP: sessions held at once; a new one beyond it is refused until one closes or
-    /// idles out.
-    #[arg(long, default_value_t = 1024)]
-    max_sessions: usize,
     /// HTTP: the expected token issuer (the authorization server).
     #[arg(long)]
     issuer: Option<String>,
@@ -713,7 +709,7 @@ fn serve_http(
     addr: SocketAddr,
     runtime: &tokio::runtime::Runtime,
 ) -> Result<()> {
-    use kiwi_mcp::http::{HttpAuth, JwtAuth, KeyFormat, router_with_sessions, serve};
+    use kiwi_mcp::http::{HttpAuth, JwtAuth, KeyFormat, router, serve};
     let auth = if let Some(principal) = &args.insecure_principal {
         if !addr.ip().is_loopback() {
             bail!("--insecure-principal only binds to a loopback address");
@@ -757,10 +753,7 @@ fn serve_http(
         ];
     }
     eprintln!("kiwi: serving {} on http://{addr}/mcp", service.describe());
-    runtime.block_on(serve(
-        router_with_sessions(service, auth, hosts, args.max_sessions.max(1)),
-        addr,
-    ))?;
+    runtime.block_on(serve(router(service, auth, hosts), addr))?;
     Ok(())
 }
 

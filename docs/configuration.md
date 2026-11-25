@@ -37,8 +37,10 @@ and paragraph checks are the same for LF and CRLF files.
 | `governance.policy` | `.kiwi/policy.cedar` | The policy file. |
 | `governance.policy_tests` | `.kiwi/policy.tests.yaml` | The policy tests. |
 | `governance.principals` | `.kiwi/principals.yaml` | The principal directory. |
-| `search.budget` | `800` | Token budget of an answer when the request names none (50-32,000). |
-| `search.limit` | `10` | Results considered before the budget cut when the request names none (at most 50). |
+| `map.budget` | `4000` | Tokens of a `kiwi_map` answer when the request names none (50-32,000): the titles of about 150 documents. |
+| `search.budget` | `1000` | Tokens for each query of a `kiwi_search` when the request names none (50-32,000): ten results with their abstracts. The answer gets this times its number of queries, at most 32,000. |
+| `search.limit` | `10` | Results for each query before the budget cut when the request names none (at most 50). Each query also keeps its own best three, whatever the others rank. |
+| `read.budget` | `12000` | Tokens of text of a `kiwi_read` answer when the request names none (50-32,000): a few long documents whole, under the 25,000-token tool-output ceiling of common MCP clients. |
 | `packs.keep` | `10` | Packs kept after each build, the current one included; older pinned citations stop resolving once their pack goes. |
 | `forge.kind` | `local` | `local`: a branch and a proposal record. `github`: push the branch and open a pull request with `gh`. |
 | `forge.remote` | `origin` | The remote `github` pushes to. |
@@ -153,7 +155,7 @@ refuse when there is none.
 | --- | --- |
 | `kiwi build <corpus>` | `--embedder <name>` (`hash` needs no model), `--no-bm25`, `--no-vec`, `--as-of <YYYY-MM-DD>`, `--json` |
 | `kiwi serve <corpus>...` | several corpora federate by namespace (`--rev` with one only); `--embedder`, `--no-bm25`, `--no-vec`; `--principal` (stdio), `--agent` (default `local-agent`); `--packs <dir>` and `--state <dir>` (with several corpora, each corpus uses `<dir>/<namespace>`); `--no-audit`; `--watch` (with `--worktree` rebuilds the working files when one changes; otherwise rebuilds `HEAD` when it or a branch moves, so commits stay what is served; not with `--rev`); `--follow` (never builds: serves the pack each store's `CURRENT` names and every pack a `kiwi build` elsewhere makes current, with its snapshot's policy, on a change to the store, on `SIGHUP` and every 30 seconds; not with `--watch` or `--rev`) |
-| `kiwi serve` over HTTP | `--http <addr>`; one of `--auth-hs256-env <VAR>`, `--auth-rs256-pem <file>`, `--auth-jwks <file>` (key files are re-read when their content changes; each key is taken on its own; an empty set revokes all keys; a missing or broken file keeps the keys and is reported), or `--insecure-principal <user>` (loopback only, the `insecure` channel); `--issuer <url>` (required), `--resource <url>` (the token audience; default `http://<addr>/mcp`), `--allowed-host <host>` (repeatable; default localhost), `--max-sessions <n>` (1,024) |
+| `kiwi serve` over HTTP | `--http <addr>`; one of `--auth-hs256-env <VAR>`, `--auth-rs256-pem <file>`, `--auth-jwks <file>` (key files are re-read when their content changes; each key is taken on its own; an empty set revokes all keys; a missing or broken file keeps the keys and is reported), or `--insecure-principal <user>` (loopback only, the `insecure` channel); `--issuer <url>` (required), `--resource <url>` (the token audience; default `http://<addr>/mcp`), `--allowed-host <host>` (repeatable; default localhost). Stateless: every request is authenticated and answered on its own, with no session to expire or exhaust |
 | `kiwi query <corpus> <tool> [json]` | `--principal` (default `anonymous`), `--agent` (default `cli`) |
 | `kiwi lint <corpus>` | `--json`; exit code 1 on errors |
 | `kiwi policy test <corpus>` | runs `.kiwi/policy.tests.yaml` |
@@ -211,7 +213,7 @@ whichever of them it carries.
 | `docs` | array of strings | *optional*; when not empty: the distinct document paths (without `.md`) of `ids` |
 | `results` | integer | *optional*; on an `ok` map, search, read, trace or resource: items returned by the whole call |
 | `tokens` | integer | *optional*; on every call record: tokens of the body the caller received, answer or message, with the budget's tokenizer |
-| `budget` | integer | *optional*; on an `ok` map or search: the token budget applied |
+| `budget` | integer | *optional*; on an `ok` map, search or read: the token budget applied |
 | `latency_ms` | integer | *optional*; on every call record: server time until the record |
 | `queries` | array of strings | *optional*; only with `audit.record_requests` and when the call named any |
 | `reference` | string | *optional*; on a `failed` record: the reference the caller was given |

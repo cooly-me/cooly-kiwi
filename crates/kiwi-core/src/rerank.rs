@@ -181,6 +181,7 @@ mod tests {
                 score: 1.0 / f64::from(uid + 1),
                 why: BTreeSet::new(),
                 replaces: BTreeSet::new(),
+                queries: 0,
             })
             .collect()
     }
