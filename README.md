@@ -68,7 +68,7 @@ Build from source with Rust 1.95 or newer, then compile the bundled example corp
 fictional marketplace, Acme) and search it as Alice, an engineer:
 
 ```sh
-git clone https://github.com/justvinhhere/cooly-kiwi && cd cooly-kiwi
+git clone https://github.com/cooly-me/cooly-kiwi && cd cooly-kiwi
 cargo build --release && export PATH="$PWD/target/release:$PATH"
 kiwi build fixtures/acme-kb --embedder hash   # no model; without the flag: multilingual-e5-small
 kiwi query fixtures/acme-kb kiwi_search \

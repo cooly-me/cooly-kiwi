@@ -19,7 +19,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
 license = "Apache-2.0"
-repository = "https://github.com/justvinhhere/cooly-kiwi"
+repository = "https://github.com/cooly-me/cooly-kiwi"
 authors = ["The Kiwi authors"]
 keywords = ["mcp", "knowledge-base", "agents", "markdown", "governance"]
 
