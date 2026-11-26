@@ -32,6 +32,9 @@ fn ids(results: &Value) -> Vec<String> {
         .collect()
 }
 
+// Natural-language queries need lexical search: without `bm25` a search answers exact ids,
+// paths and terms only.
+#[cfg(feature = "bm25")]
 #[test]
 fn a_search_of_five_queries_answers_every_one() {
     let corpus = Corpus::copy();
