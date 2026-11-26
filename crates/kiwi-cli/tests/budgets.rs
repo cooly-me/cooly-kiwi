@@ -6,6 +6,7 @@
 
 mod common;
 
+#[cfg(feature = "bm25")]
 use std::collections::BTreeSet;
 
 use common::Corpus;
@@ -23,6 +24,7 @@ fn strings(list: &Value) -> Vec<String> {
         .collect()
 }
 
+#[cfg(feature = "bm25")]
 fn ids(results: &Value) -> Vec<String> {
     results
         .as_array()
@@ -79,6 +81,7 @@ fn a_search_of_five_queries_answers_every_one() {
 }
 
 /// The budget one query gets alone.
+#[cfg(feature = "bm25")]
 fn alone_limit(corpus: &Corpus) -> Option<u64> {
     call(corpus, "kiwi_search", &json!({ "queries": ["refunds"] }))["budget"]["limit"].as_u64()
 }
