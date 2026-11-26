@@ -1,0 +1,40 @@
+# Baseline of the `acme` suite (bench/run.sh): the example corpus with the `hash`
+# embedder, and the 100,000-atom synthetic scale point. Quality is deterministic;
+# timings were measured on an AMD Ryzen 5 5600G (6 cores, 12 threads), Ubuntu 22.04,
+# with a release build of the Linux feature set, and are loose on purpose: they catch
+# a slowdown of the algorithm, not a slower machine. Update the figures in the pull
+# request of a change that moves them on purpose.
+
+[tolerance]
+quality = 0.01          # recall@5, recall@10 and MRR may drop this much (absolute)
+latency = 5.0           # times may grow to this many times the baseline...
+latency_floor_ms = 5.0  # ...or by this many milliseconds, whichever is larger
+
+[modes.navigation]
+recall_at_5 = 0.621
+recall_at_10 = 0.621
+mrr = 0.491
+p95_ms = 0.049
+
+[modes.bm25]
+recall_at_5 = 0.848
+recall_at_10 = 0.947
+mrr = 0.677
+p95_ms = 0.075
+
+[modes."bm25+vec"]
+recall_at_5 = 0.773
+recall_at_10 = 0.856
+mrr = 0.689
+p95_ms = 0.192
+
+[timings]
+full_build_ms = 162
+reload_ms = 0.45
+cold_start_ms = 0.15
+
+[scale]
+build_ms = 14355
+exact_p95_ms = 0.007
+bm25_p95_ms = 2.022
+vec_p95_ms = 0.992

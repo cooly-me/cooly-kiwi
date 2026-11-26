@@ -1,0 +1,49 @@
+// The ABI of Kiwi third-party plugins. A plugin is a WebAssembly component that
+// exports this world and imports nothing: no files, no clock, no network. The host only
+// passes atoms the plugin's declared capabilities and the corpus policy allow.
+package kiwi:plugin@0.1.0;
+
+interface types {
+  /// What the plugin declares it reads and reaches.
+  record capabilities {
+    /// It reads atom text.
+    content: bool,
+    /// It reads permission labels.
+    labels: bool,
+    /// Hosts it would contact (informational; a component cannot open sockets).
+    network: list<string>,
+  }
+
+  /// One atom, as the host passes it.
+  record atom {
+    id: string,
+    title: string,
+    breadcrumb: string,
+    summary: string,
+    body: string,
+    /// Permission labels of the atom's access chain (empty unless `labels` was declared).
+    labels: list<string>,
+  }
+
+  enum severity { warning, error }
+
+  record finding {
+    severity: severity,
+    rule: string,
+    id: string,
+    message: string,
+  }
+}
+
+world plugin {
+  use types.{capabilities, atom, finding};
+
+  /// A short, stable plugin name.
+  export name: func() -> string;
+  /// The capability manifest.
+  export capabilities: func() -> capabilities;
+  /// Lint rules over a batch of atoms (may return nothing).
+  export lint: func(atoms: list<atom>) -> list<finding>;
+  /// An L1 abstract for an atom, or none to keep the default.
+  export summarize: func(atom: atom) -> option<string>;
+}

@@ -1,0 +1,140 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="440" viewBox="0 0 900 440" role="img" aria-labelledby="title desc">
+<title id="title">Kiwi governance</title>
+<desc id="desc">Access is declared in Git by KIWIOWNERS path rules, frontmatter and heading attributes, and compiled into permission classes, each a Roaring bitmap of atom ids. At query time a Cedar policy decides, for the user intersected with the agent's grant and the session's scope, which classes are permitted; the OR of their bitmaps is the caller's view, and every retrieval tier runs inside it.</desc>
+<style>
+text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans",Helvetica,Arial,sans-serif;fill:#1f2328}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace}
+.t{font-size:14px;font-weight:600}
+.s{font-size:12px;fill:#59636e}
+.b{font-size:12.5px}
+.code{font-size:11.5px}
+.lane{font-size:11px;font-weight:700;letter-spacing:.08em;fill:#59636e}
+.el{font-size:11.5px;fill:#59636e}
+.acc{fill:#0550ae;font-weight:600}
+.bg{fill:#ffffff}
+.panel{fill:#f6f8fa;stroke:#d1d9e0}
+.node{fill:#ffffff;stroke:#b7c0ca;stroke-width:1.2}
+.key{fill:#ddf4ff;stroke:#0969da;stroke-width:1.6}
+.gate{fill:#fff8c5;stroke:#9a6700;stroke-width:1.6}
+.plug{fill:#ffffff;stroke:#818b98;stroke-width:1.2;stroke-dasharray:5 4}
+.view{fill:none;stroke:#0969da;stroke-width:1.4;stroke-dasharray:6 4}
+.edge{stroke:#59636e;stroke-width:1.5;fill:none}
+.dash{stroke-dasharray:5 4}
+.head{fill:#59636e}
+.off{fill:#eaeef2}
+.c0{fill:#1a7f37}.c1{fill:#0969da}.c2{fill:#bc4c00}
+.tag{font-size:10.5px;font-weight:600;letter-spacing:.04em;fill:#59636e}
+</style>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="head"/></marker></defs>
+<rect width="900" height="440" rx="12" class="bg"/>
+<rect x="16" y="8" width="284" height="424" rx="12" class="panel"/>
+<rect x="320" y="8" width="272" height="424" rx="12" class="panel"/>
+<rect x="612" y="8" width="272" height="424" rx="12" class="panel"/>
+<text x="32" y="33" class="lane">DECLARED IN GIT</text>
+<text x="336" y="33" class="lane">COMPILED INTO THE PACK</text>
+<text x="628" y="33" class="lane">AT QUERY TIME</text>
+<rect x="32" y="46" width="252" height="112" rx="10" class="node"/>
+<text x="46" y="69" class="t">KIWIOWNERS</text>
+<text x="46" y="86" class="s">per path · the last match wins</text>
+<text x="46" y="107" class="mono code" xml:space="preserve">*           label=internal</text>
+<text x="46" y="122" class="mono code" xml:space="preserve">vision.md   label=public</text>
+<text x="46" y="137" class="mono code" xml:space="preserve">finance/**  label=confidential</text>
+<text x="46" y="152" class="mono code" xml:space="preserve">            groups=finance</text>
+<rect x="32" y="168" width="252" height="112" rx="10" class="node"/>
+<text x="46" y="191" class="t">Frontmatter</text>
+<text x="46" y="208" class="s">replaces the path rule</text>
+<text x="46" y="229" class="mono code" xml:space="preserve">access:</text>
+<text x="46" y="244" class="mono code" xml:space="preserve">  label: internal</text>
+<text x="46" y="259" class="mono code" xml:space="preserve">  groups: [eng, product]</text>
+<rect x="32" y="290" width="252" height="112" rx="10" class="node"/>
+<text x="46" y="313" class="t">Heading attribute</text>
+<text x="46" y="330" class="s">narrows one section</text>
+<text x="46" y="351" class="mono code" xml:space="preserve">## Tiers {#tiers access=finance}</text>
+<text x="46" y="370" class="s">= label confidential, groups finance</text>
+<path d="M284 102 H302" class="edge"/>
+<path d="M284 224 H302" class="edge"/>
+<path d="M284 346 H302" class="edge"/>
+<path d="M302 102 V346" class="edge"/>
+<path d="M302 224 H334" class="edge " marker-end="url(#a)"/>
+<rect x="336" y="46" width="240" height="356" rx="10" class="node"/>
+<text x="456" y="70" text-anchor="middle" class="t">Permission classes</text>
+<text x="456" y="88" text-anchor="middle" class="s">one per chain of declarations</text>
+<circle cx="355" cy="114" r="4.5" class="c0"/>
+<text x="366" y="118" class="b"><tspan class="mono">c0</tspan>  public</text>
+<rect x="350" y="128" width="14" height="14" rx="3" class="c0"/>
+<rect x="368" y="128" width="14" height="14" rx="3" class="c0"/>
+<rect x="386" y="128" width="14" height="14" rx="3" class="off"/>
+<rect x="404" y="128" width="14" height="14" rx="3" class="off"/>
+<rect x="422" y="128" width="14" height="14" rx="3" class="off"/>
+<rect x="440" y="128" width="14" height="14" rx="3" class="c0"/>
+<rect x="458" y="128" width="14" height="14" rx="3" class="off"/>
+<rect x="476" y="128" width="14" height="14" rx="3" class="off"/>
+<rect x="494" y="128" width="14" height="14" rx="3" class="off"/>
+<rect x="512" y="128" width="14" height="14" rx="3" class="off"/>
+<rect x="530" y="128" width="14" height="14" rx="3" class="off"/>
+<rect x="548" y="128" width="14" height="14" rx="3" class="off"/>
+<circle cx="355" cy="172" r="4.5" class="c1"/>
+<text x="366" y="176" class="b"><tspan class="mono">c1</tspan>  internal</text>
+<rect x="350" y="186" width="14" height="14" rx="3" class="off"/>
+<rect x="368" y="186" width="14" height="14" rx="3" class="off"/>
+<rect x="386" y="186" width="14" height="14" rx="3" class="c1"/>
+<rect x="404" y="186" width="14" height="14" rx="3" class="c1"/>
+<rect x="422" y="186" width="14" height="14" rx="3" class="c1"/>
+<rect x="440" y="186" width="14" height="14" rx="3" class="off"/>
+<rect x="458" y="186" width="14" height="14" rx="3" class="c1"/>
+<rect x="476" y="186" width="14" height="14" rx="3" class="off"/>
+<rect x="494" y="186" width="14" height="14" rx="3" class="off"/>
+<rect x="512" y="186" width="14" height="14" rx="3" class="c1"/>
+<rect x="530" y="186" width="14" height="14" rx="3" class="c1"/>
+<rect x="548" y="186" width="14" height="14" rx="3" class="off"/>
+<circle cx="355" cy="230" r="4.5" class="c2"/>
+<text x="366" y="234" class="b"><tspan class="mono">c2</tspan>  confidential · finance</text>
+<rect x="350" y="244" width="14" height="14" rx="3" class="off"/>
+<rect x="368" y="244" width="14" height="14" rx="3" class="off"/>
+<rect x="386" y="244" width="14" height="14" rx="3" class="off"/>
+<rect x="404" y="244" width="14" height="14" rx="3" class="off"/>
+<rect x="422" y="244" width="14" height="14" rx="3" class="off"/>
+<rect x="440" y="244" width="14" height="14" rx="3" class="off"/>
+<rect x="458" y="244" width="14" height="14" rx="3" class="off"/>
+<rect x="476" y="244" width="14" height="14" rx="3" class="c2"/>
+<rect x="494" y="244" width="14" height="14" rx="3" class="c2"/>
+<rect x="512" y="244" width="14" height="14" rx="3" class="off"/>
+<rect x="530" y="244" width="14" height="14" rx="3" class="off"/>
+<rect x="548" y="244" width="14" height="14" rx="3" class="c2"/>
+<text x="456" y="300" text-anchor="middle" class="s">each class is a Roaring bitmap</text>
+<text x="456" y="317" text-anchor="middle" class="s">of atom ids, stored in the pack</text>
+<text x="456" y="352" text-anchor="middle" class="el">a section is readable only with</text>
+<text x="456" y="368" text-anchor="middle" class="el">its document's permission and</text>
+<text x="456" y="384" text-anchor="middle" class="el">every narrowing above it</text>
+<rect x="628" y="46" width="240" height="76" rx="10" class="node"/>
+<text x="748.0" y="70" text-anchor="middle" class="t">Who is asking</text>
+<text x="748.0" y="91" text-anchor="middle" class="s">the user ∩ the agent's grant</text>
+<text x="748.0" y="108" text-anchor="middle" class="s">∩ the session's scope</text>
+<path d="M748 122 V140" class="edge " marker-end="url(#a)"/>
+<rect x="628" y="142" width="240" height="92" rx="10" class="gate"/>
+<text x="748.0" y="166" text-anchor="middle" class="t">Cedar policy</text>
+<text x="748.0" y="187" text-anchor="middle" class="s">default deny · decided once per</text>
+<text x="748.0" y="204" text-anchor="middle" class="s">snapshot and identity</text>
+<text x="748.0" y="221" text-anchor="middle" class="b acc">permits c0 and c1</text>
+<path d="M748 234 V252" class="edge " marker-end="url(#a)"/>
+<rect x="628" y="254" width="240" height="72" rx="10" class="key"/>
+<text x="748" y="278" text-anchor="middle" class="t">The caller's view</text>
+<rect x="642" y="290" width="14" height="14" rx="3" class="c0"/>
+<rect x="660" y="290" width="14" height="14" rx="3" class="c0"/>
+<rect x="678" y="290" width="14" height="14" rx="3" class="c1"/>
+<rect x="696" y="290" width="14" height="14" rx="3" class="c1"/>
+<rect x="714" y="290" width="14" height="14" rx="3" class="c1"/>
+<rect x="732" y="290" width="14" height="14" rx="3" class="c0"/>
+<rect x="750" y="290" width="14" height="14" rx="3" class="c1"/>
+<rect x="768" y="290" width="14" height="14" rx="3" class="off"/>
+<rect x="786" y="290" width="14" height="14" rx="3" class="off"/>
+<rect x="804" y="290" width="14" height="14" rx="3" class="c1"/>
+<rect x="822" y="290" width="14" height="14" rx="3" class="c1"/>
+<rect x="840" y="290" width="14" height="14" rx="3" class="off"/>
+<text x="748" y="319" text-anchor="middle" class="s">c0 OR c1 · 9 of 12 atoms</text>
+<path d="M576 160 C 600 160, 604 290, 626 290" class="edge " marker-end="url(#a)"/>
+<path d="M748 326 V344" class="edge " marker-end="url(#a)"/>
+<rect x="628" y="346" width="240" height="56" rx="10" class="node"/>
+<text x="748.0" y="369" text-anchor="middle" class="t">Every tier and plugin</text>
+<text x="748.0" y="390" text-anchor="middle" class="s">reads only the view, before ranking</text>
+</svg>

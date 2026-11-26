@@ -1,0 +1,25 @@
+# Unit tests for policy.cedar, run by `kiwi policy test` (and in CI).
+tests:
+  - { name: anyone reads public, principal: carl, label: public, expect: allow }
+  - { name: contractors do not read internal, principal: carl, label: internal, expect: deny }
+  - { name: staff read internal, principal: alice, label: internal, expect: allow }
+  - { name: internal limited to groups, principal: alice, label: internal, groups: [product], expect: deny }
+  - { name: product reads product-internal, principal: priya, label: internal, groups: [eng, product], expect: allow }
+  - { name: finance reads finance, principal: fiona, label: confidential, groups: [finance], expect: allow }
+  - { name: engineers do not read finance, principal: alice, label: confidential, groups: [finance], expect: deny }
+  - { name: finance does not read legal, principal: fiona, label: confidential, groups: [legal], expect: deny }
+  - { name: exec reads restricted over http, principal: erin, channel: http, label: restricted, groups: [exec], expect: allow }
+  - { name: no restricted content over stdio, principal: erin, channel: stdio, label: restricted, groups: [exec], expect: deny }
+  - { name: finance does not read restricted, principal: fiona, label: restricted, groups: [exec], expect: deny }
+  - { name: unlabeled content is denied, principal: erin, label: unlabeled, expect: deny }
+  - { name: unknown users read public only, principal: nobody, label: internal, expect: deny }
+  - { name: agent grant narrows a user, principal: fiona, agent: summarizer, label: confidential, groups: [finance], expect: deny }
+  - { name: agent grant keeps internal, principal: fiona, agent: summarizer, label: internal, expect: allow }
+  - { name: untrusted agents read public only, principal: erin, agent: untrusted-bot, label: internal, expect: deny }
+  - { name: untrusted agents keep public, principal: erin, agent: untrusted-bot, label: public, expect: allow }
+  - { name: unlisted agents read nothing, principal: erin, agent: some-new-agent, label: public, expect: deny }
+  - { name: staff propose, principal: alice, action: propose, label: internal, expect: allow }
+  - { name: contractors do not propose, principal: carl, action: propose, label: public, expect: deny }
+  - { name: platform merges internal directly, principal: paul, action: merge, label: internal, expect: allow }
+  - { name: others need review, principal: alice, action: merge, label: internal, expect: deny }
+  - { name: no direct merge of confidential, principal: erin, action: merge, label: confidential, groups: [finance], expect: deny }
