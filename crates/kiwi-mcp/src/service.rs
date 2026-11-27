@@ -609,6 +609,7 @@ impl KiwiService {
                 .collect();
         }
         let summary = CallSummary {
+            call: crate::server::unique_id(32),
             status,
             results: results.filter(|_| answered),
             tokens,

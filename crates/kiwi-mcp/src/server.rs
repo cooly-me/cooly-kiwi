@@ -33,15 +33,24 @@ knowledge only through kiwi_propose (it opens a branch and a pull request).";
 /// returns the reference a client is given instead of the details: server paths, a
 /// tool's output or a corpus the caller cannot see never reach an MCP client.
 pub fn log_internal(message: &str) -> String {
+    let reference = unique_id(12);
+    tracing::error!(reference = %reference, %message, "internal error");
+    eprintln!("kiwi: internal error {reference}: {message}");
+    reference
+}
+
+/// An id of `len` hex digits (at most 64) no other id this or another server process
+/// made: the BLAKE3 of the process, a counter and the clock to the nanosecond.
+pub(crate) fn unique_id(len: usize) -> String {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let mut hasher = blake3::Hasher::new();
     hasher.update(&std::process::id().to_le_bytes());
     hasher.update(&NEXT.fetch_add(1, Ordering::Relaxed).to_le_bytes());
-    hasher.update(kiwi_core::date::timestamp(kiwi_core::date::now_unix()).as_bytes());
-    let reference = hasher.finalize().to_hex()[..12].to_owned();
-    tracing::error!(reference = %reference, %message, "internal error");
-    eprintln!("kiwi: internal error {reference}: {message}");
-    reference
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    hasher.update(&nanos.to_le_bytes());
+    hasher.finalize().to_hex()[..len].to_owned()
 }
 
 /// The error an MCP client receives for an internal failure.
