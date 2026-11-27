@@ -184,7 +184,7 @@ audit log. [docs/design.md](docs/design.md) has the full design and its reasons.
 | Tool | Main input | Returns |
 | --- | --- | --- |
 | `kiwi_map` | `scope`, `depth`, `budget` | The L0/L1 tree of a scope (an atom id, a path prefix or a namespace) |
-| `kiwi_search` | `queries[]`, `filters`, `budget`, `limit` | Ranked atoms at L1 or L0, why they matched, their status; every query answered |
+| `kiwi_search` | `queries[]`, `filters`, `budget`, `limit`; or `literal`, `ignore_case`, `filters`, `budget`, `after` | Ranked atoms at L1 or L0, why they matched, their status; every query answered. With `literal`: every line that contains the exact string, page by page |
 | `kiwi_read` | `ids[]`, `level`, `context`, `budget`, `after` | Whole documents or sections at L2 (or L0/L1), typed links, optional parent, siblings and children; `more` when the budget cut it |
 | `kiwi_trace` | `id`, `relation`, `direction`, `depth` | A walk of the typed graph, e.g. PRD → RFC → ADR → code |
 | `kiwi_propose` | `changes[]`, `rationale`, `title` | The branch and pull request, whether review is needed, lint findings |

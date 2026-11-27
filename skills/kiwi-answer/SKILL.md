@@ -28,6 +28,15 @@ answer, say so; do not read the files instead.
 3. **Why questions:** `kiwi_trace` from the atom (`depth: 1`, then 2) walks
    implements, decided_by, supersedes, amends and code links; read the nodes you need.
 
+## Find every mention
+
+Ranked search answers what a text is about and stops at `limit`. To list every place an
+exact string appears (a name, a code, a phrase to quote or rename), pass `literal`
+instead of `queries`: `{"literal": "cap_reached", "ignore_case": true}`, with `filters`
+to narrow it. Each match is `{id, line, text}`, `line` counted in the section as
+`kiwi_read` gives it. When the answer has `next`, call `kiwi_search` with it, until no
+`next` comes back: then the list is complete. Never grep a copy of the files for this.
+
 ## Deep research (long reports, posts, designs)
 
 1. **Map.** `kiwi_map` the areas involved (`{"scope": "engineering/"}`, or no scope for

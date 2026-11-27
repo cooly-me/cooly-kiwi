@@ -147,6 +147,14 @@ const CANARIES: [(&str, &str, &[&str]); 11] = [
     ),
 ];
 
+/// Literals searched for: words of hidden and visible sections alike, a heading marker,
+/// and every canary.
+fn literals() -> impl Iterator<Item = &'static str> {
+    ["Saga", "the", "## ", "ADR-005", "budget", "appears here"]
+        .into_iter()
+        .chain(CANARIES.iter().map(|(word, _, _)| *word))
+}
+
 /// Whether `principal` through `agent` may read a canary of `audience`. Every canary
 /// but the internal `Larkspurrow` is confidential or restricted: the summarizer's grant
 /// stops at internal, and the untrusted agent reads only public content.
@@ -611,6 +619,37 @@ fn hidden_content_cannot_change_any_answer() {
             );
             compared += 1;
         }
+        // Literal searches, page by page: the same matches, lines, pages and cursors.
+        for literal in literals() {
+            for ignore_case in [false, true] {
+                let mut request = SearchRequest {
+                    literal: Some(literal.to_owned()),
+                    ignore_case,
+                    budget: Some(200),
+                    ..Default::default()
+                };
+                loop {
+                    let a = full_engine.literal_search(&full_view, &request).unwrap().0;
+                    let b = stripped_engine
+                        .literal_search(&stripped_view, &request)
+                        .unwrap()
+                        .0;
+                    let next = a.next.clone();
+                    assert_eq!(
+                        without_snapshot(serde_json::to_string(&a).unwrap()),
+                        without_snapshot(serde_json::to_string(&b).unwrap()),
+                        "{} literal {literal:?} {:?}",
+                        case.id,
+                        request.after
+                    );
+                    compared += 1;
+                    match next {
+                        Some(next) => request = next,
+                        None => break,
+                    }
+                }
+            }
+        }
         for (scope, depth) in [(None, Some(3)), (Some("product".to_owned()), Some(4))] {
             let request = MapRequest {
                 scope,
@@ -671,6 +710,9 @@ fn hidden_content_cannot_change_any_answer() {
             .iter()
             .map(|qs| ("kiwi_search", json!({ "queries": qs })))
             .collect();
+        calls.extend(
+            literals().map(|literal| ("kiwi_search", json!({ "literal": literal, "ignore_case": true }))),
+        );
         calls.push(("kiwi_map", json!({"depth": 3, "budget": 20_000})));
         calls.push((
             "kiwi_map",
@@ -788,6 +830,18 @@ fn adversarial_declarations_are_enforced() {
                 ..Default::default()
             };
             let opened = serde_json::to_string(&engine.read(&view, &read).unwrap().0).unwrap();
+            let literal = SearchRequest {
+                literal: Some(word.to_lowercase()),
+                ignore_case: true,
+                budget: Some(32_000),
+                ..Default::default()
+            };
+            let listed = engine.literal_search(&view, &literal).unwrap().0;
+            assert_eq!(
+                listed.matches.iter().any(|m| m.text.contains(word)),
+                expected,
+                "{principal}/{agent}: {word} in {listed:?}"
+            );
             if !expected {
                 assert!(!answer.contains(word), "{principal}/{agent}: {word} in {answer}");
             }

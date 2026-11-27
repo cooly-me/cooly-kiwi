@@ -108,8 +108,8 @@ pub fn tools(defaults: &EngineConfig) -> Vec<Tool> {
         tool::<SearchRequest>(
             "kiwi_search",
             format!(
-                "Ranked atoms (sections) for 1-{MAX_QUERIES} queries you write, best in one call: keywords, synonyms, ids or a one-line hypothetical answer. Each query gets `limit` results (default {}, at most {MAX_SEARCH_LIMIT}) and `budget` tokens (default {}; the answer at most {MAX_BUDGET}), and every query that matches has at least one result. High-ranked results carry an L1 abstract, the rest an L0 title; `omitted` counts what did not fit. Filters: type (vision, prd, rfc, adr, runbook, standard, glossary), status, owner, tags, path, namespace. Then read what you need with kiwi_read.",
-                defaults.search_limit, defaults.search_budget
+                "Ranked atoms (sections) for 1-{MAX_QUERIES} queries you write, best in one call: keywords, synonyms, ids or a one-line hypothetical answer. Each query gets `limit` results (default {}, at most {MAX_SEARCH_LIMIT}) and `budget` tokens (default {}; the answer at most {MAX_BUDGET}), and every query that matches has at least one result. High-ranked results carry an L1 abstract, the rest an L0 title; `omitted` counts what did not fit. Filters: type (vision, prd, rfc, adr, runbook, standard, glossary), status, owner, tags, path, namespace. Then read what you need with kiwi_read. To list every place an exact string appears (a name, a phrase, a code), pass `literal` instead of `queries` (and `ignore_case: true` to match any case): the answer is every matching line, `{{id, line, text}}` in corpus order, `line` counted in the section's text as kiwi_read gives it, the same filters apply, a page is `budget` tokens (default {}, at most {MAX_BUDGET}), and `next` is the exact arguments of the call for the next page; without `next` the list is complete.",
+                defaults.search_limit, defaults.search_budget, defaults.read_budget
             ),
             true,
         ),

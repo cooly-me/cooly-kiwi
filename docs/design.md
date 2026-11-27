@@ -473,6 +473,22 @@ as stable as its scores). The server caches
 response bytes per (pack, permitted classes, tool, request), and an agent's prompt
 cache hits when it repeats a call.
 
+**Literal search lists every match.** Ranking answers "what is about this"; an audit, a
+rename or a quotation asks "where does this exact string appear", and only a complete
+list answers it. `kiwi_search` with `literal` (instead of `queries`) scans the text of
+every section in the caller's view, after the same filters, in corpus order, and lists
+each line that contains the string (`ignore_case: true` compares the lowercase of both,
+Unicode-aware): `{id, line, text}`, where `line` counts from 1 in the section's own text
+as `kiwi_read` gives it, and `text` is the line, cut to 240 characters around the match.
+Nothing ranks or folds, and `limit` does not apply. A page is cut by the token budget (the
+read budget by default, since a page is read rather than skimmed); when it is full the
+answer carries `next`, the exact arguments of the call that lists on, with `after` naming
+the last match given (`id:line`, namespaced on a federated server). Like reading on, it is
+stateless, and an `after` that names a section the caller cannot see is refused with the
+words used for a section that does not exist. Lines are counted within sections, never in
+the source file: a file line would tell a caller how much hidden text precedes a visible
+section.
+
 **Navigation without an index.** With no plugin, `kiwi_map` returns the L0/L1 tree of a
 scope within a budget and `kiwi_read` opens atoms, the way a person reads a table of
 contents. This mode is the baseline every plugin is measured against.
@@ -489,6 +505,7 @@ the tool descriptions state them, so a model knows it can ask for more:
 | --- | --- | --- |
 | `kiwi_map` | 4,000 tokens (`map.budget`) | The titles of about 150 documents: one call orients in a corpus or a folder |
 | `kiwi_search` | 1,000 tokens and 10 results for each query (`search.budget`, `search.limit`) | Ten results with their abstracts per query; a search of five queries is as deep as five searches |
+| `kiwi_search` with `literal` | the `kiwi_read` default for each page | Every match is listed; a page holds a few hundred lines, and `next` lists on |
 | `kiwi_read` | 12,000 tokens of text (`read.budget`) | A few long documents whole, under the 25,000-token ceiling Claude Code puts on a tool's output by default |
 
 **Reads are whole and never cut silently.** At L2, an id is read with everything under
@@ -706,7 +723,7 @@ agent's context, and fewer tools are chosen correctly more often.
 | Tool | Main input | Returns |
 | --- | --- | --- |
 | `kiwi_map` | `scope`, `depth`, `budget` | The L0/L1 tree of a scope, to orient |
-| `kiwi_search` | `queries[]`, `filters`, `budget`, `limit` | Ranked atoms at L1 or L0, why they matched, their status; every query answered |
+| `kiwi_search` | `queries[]`, `filters`, `budget`, `limit`; or `literal`, `ignore_case`, `filters`, `budget`, `after` | Ranked atoms at L1 or L0, why they matched, their status; every query answered. With `literal`: every line that contains the exact string, page by page |
 | `kiwi_read` | `ids[]`, `level`, `context`, `budget`, `after` | Whole documents or sections at L2 (or L0/L1), typed links, optional parent, siblings and children; `more` when the budget cut it |
 | `kiwi_trace` | `id`, `relation`, `direction`, `depth` | A walk of the typed graph |
 | `kiwi_propose` | `changes[]`, `rationale`, `title` | The branch and pull request, whether review is needed, lint findings |

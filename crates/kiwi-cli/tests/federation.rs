@@ -281,6 +281,41 @@ fn hidden_corpora_and_sections_cannot_change_any_answer() {
         build(&beta_stripped.root);
         let stripped = federation(&[&acme_stripped.root, &beta_stripped.root]);
 
+        // Literal searches page across the corpora: the same pages and cursors, and
+        // nothing of a corpus the caller cannot see.
+        for literal in ["the", "Saga", CANARY] {
+            let mut args = json!({ "literal": literal, "ignore_case": true, "budget": 120 });
+            let mut corpora = BTreeSet::new();
+            loop {
+                let a = call(&full, &who, "kiwi_search", args.clone()).unwrap();
+                let b = call(&stripped, &who, "kiwi_search", args.clone()).unwrap();
+                assert_eq!(
+                    without_snapshots(&a),
+                    without_snapshots(&b),
+                    "{} literal {args}",
+                    case.id
+                );
+                if !sees_beta {
+                    assert!(
+                        !a.contains(CANARY) && !a.contains("beta:"),
+                        "{} sees beta: {a}",
+                        case.id
+                    );
+                }
+                compared += 1;
+                let page: Value = serde_json::from_str(&a).unwrap();
+                for m in page["matches"].as_array().unwrap() {
+                    corpora.insert(m["id"].as_str().unwrap().split(':').next().unwrap().to_owned());
+                }
+                match page.get("next") {
+                    Some(next) => args = next.clone(),
+                    None => break,
+                }
+            }
+            if literal == CANARY && sees_beta {
+                assert!(corpora.contains("beta"), "{}: {corpora:?}", case.id);
+            }
+        }
         for qs in &queries {
             let args = json!({ "queries": qs });
             let a = call(&full, &who, "kiwi_search", args.clone()).unwrap();

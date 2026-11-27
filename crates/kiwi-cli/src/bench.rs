@@ -312,6 +312,9 @@ fn search_request(question: &Question) -> SearchRequest {
         filters: Filters::default(),
         budget: None,
         limit: None,
+        literal: None,
+        ignore_case: false,
+        after: None,
     }
 }
 
