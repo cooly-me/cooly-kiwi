@@ -206,6 +206,7 @@ whichever of them it carries.
 | `tool` | string | always: `kiwi_map`, `kiwi_search`, `kiwi_read`, `kiwi_trace`, `kiwi_feedback`, `kiwi_propose`, `resource`, or `audit-quarantine` |
 | `snapshot` | string | always (empty on a quarantine record); a pinned snapshot for `resource` |
 | `namespace` | string | when not empty |
+| `call` | string, 32 hex | *optional*; on every call record: the call's id, the same on each corpus's record of one call |
 | `atoms` | array of integers | always; pack uids of `ids`, meaningful in that pack only |
 | `blocked` | integer | always; matches withheld by the policy |
 | `status` | `ok`, `refused` or `failed` | *optional*; on every call record |
@@ -222,9 +223,10 @@ whichever of them it carries.
 | `prev`, `hash` | string, 64 hex | always |
 
 On a federated server each corpus consulted writes its own record with its own `ids`,
-`docs`, `atoms` and `blocked`; `status`, `results`, `tokens`, `budget`, `latency_ms`,
-`queries` and `reference` describe the whole call and repeat on each. A call refused or
-failed before any corpus answered is recorded in every corpus.
+`docs`, `atoms` and `blocked`; `call`, `status`, `results`, `tokens`, `budget`,
+`latency_ms`, `queries` and `reference` describe the whole call and repeat on each. A call
+refused or failed before any corpus answered is recorded in every corpus. Count calls
+across logs by `call`: one call is one id however many corpora recorded it.
 
 ## Over HTTP
 

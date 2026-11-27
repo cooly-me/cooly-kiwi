@@ -102,6 +102,10 @@ pub struct AuditEvent {
     /// corpus served alone hashes without it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub namespace: String,
+    /// The call's id: the same on the record of every corpus one call consulted, so a
+    /// call federated over several corpora is counted once across their logs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call: Option<String>,
     /// Pack uids of `ids`. They name atoms of one pack only: `ids` is what stays
     /// meaningful once the corpus is rebuilt.
     pub atoms: Vec<u32>,
@@ -1062,6 +1066,7 @@ mod tests {
             budget: Some(800),
             latency_ms: Some(4),
             queries: vec!["take rate".into()],
+            call: Some("5f0c9e2a7b1d4c3e8a6f0b9d2c4e7a1f".into()),
             ..event(7)
         }
     }
@@ -1108,6 +1113,7 @@ mod tests {
             )
         );
         assert_eq!(added["queries"], serde_json::json!(["take rate"]));
+        assert_eq!(added["call"], "5f0c9e2a7b1d4c3e8a6f0b9d2c4e7a1f");
         // Editing a new field is caught like any other edit.
         let forged = text.replacen("\"tokens\":311", "\"tokens\":3", 1);
         std::fs::write(&path, forged).unwrap();

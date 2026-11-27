@@ -651,6 +651,23 @@ fn ids_citations_and_audit_are_per_corpus() {
         (&json!(2), &json!(2)),
         "the call's results, on each corpus's record"
     );
+    // One call leaves a record in each corpus it consulted, every one with the call's
+    // id; no two calls share one.
+    assert_eq!(acme_read["call"], beta_read["call"]);
+    assert_eq!(
+        of(&acme_log, "kiwi_read", "refused")[0]["call"],
+        of(&beta_log, "kiwi_read", "refused")[0]["call"]
+    );
+    for log in [&acme_log, &beta_log] {
+        let calls: Vec<&str> = log.iter().map(|r| r["call"].as_str().unwrap()).collect();
+        assert!(calls.iter().all(|c| c.len() == 32), "{calls:?}");
+        let distinct: std::collections::BTreeSet<&str> = calls.iter().copied().collect();
+        assert_eq!(distinct.len(), calls.len(), "{calls:?}");
+    }
+    assert_ne!(
+        acme_read["call"],
+        of(&acme_log, "kiwi_read", "refused")[0]["call"]
+    );
     assert_eq!(of(&beta_log, "resource", "ok")[0]["ids"], json!(["treasury"]));
     assert!(of(&acme_log, "resource", "ok").is_empty());
     for record in acme_log.iter().chain(&beta_log) {
