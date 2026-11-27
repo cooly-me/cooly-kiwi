@@ -15,7 +15,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.95"
 license = "Apache-2.0"
@@ -24,15 +24,15 @@ authors = ["The Kiwi authors"]
 keywords = ["mcp", "knowledge-base", "agents", "markdown", "governance"]
 
 [workspace.dependencies]
-kiwi-core = { path = "crates/kiwi-core", version = "0.1.0" }
-kiwi-compiler = { path = "crates/kiwi-compiler", version = "0.1.0" }
-kiwi-policy = { path = "crates/kiwi-policy", version = "0.1.0" }
-kiwi-mcp = { path = "crates/kiwi-mcp", version = "0.1.0", default-features = false }
-kiwi-bm25 = { path = "crates/kiwi-bm25", version = "0.1.0" }
-kiwi-vec = { path = "crates/kiwi-vec", version = "0.1.0", default-features = false }
-kiwi-wasm = { path = "crates/kiwi-wasm", version = "0.1.0" }
-kiwi-rerank = { path = "crates/kiwi-rerank", version = "0.1.0", default-features = false }
-kiwi-http = { path = "crates/kiwi-http", version = "0.1.0" }
+kiwi-core = { path = "crates/kiwi-core", version = "0.2.0" }
+kiwi-compiler = { path = "crates/kiwi-compiler", version = "0.2.0" }
+kiwi-policy = { path = "crates/kiwi-policy", version = "0.2.0" }
+kiwi-mcp = { path = "crates/kiwi-mcp", version = "0.2.0", default-features = false }
+kiwi-bm25 = { path = "crates/kiwi-bm25", version = "0.2.0" }
+kiwi-vec = { path = "crates/kiwi-vec", version = "0.2.0", default-features = false }
+kiwi-wasm = { path = "crates/kiwi-wasm", version = "0.2.0" }
+kiwi-rerank = { path = "crates/kiwi-rerank", version = "0.2.0", default-features = false }
+kiwi-http = { path = "crates/kiwi-http", version = "0.2.0" }
 
 anyhow = "=1.0.105"
 axum = "=0.8.9"

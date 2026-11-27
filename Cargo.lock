@@ -2990,7 +2990,7 @@ dependencies = [
 
 [[package]]
 name = "kiwi-bm25"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "blake3",
  "frostem",
@@ -3002,7 +3002,7 @@ dependencies = [
 
 [[package]]
 name = "kiwi-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3031,7 +3031,7 @@ dependencies = [
 
 [[package]]
 name = "kiwi-compiler"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "blake3",
  "fst",
@@ -3057,7 +3057,7 @@ dependencies = [
 
 [[package]]
 name = "kiwi-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "blake3",
  "fst",
@@ -3077,7 +3077,7 @@ dependencies = [
 
 [[package]]
 name = "kiwi-http"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "http",
  "thiserror",
@@ -3086,7 +3086,7 @@ dependencies = [
 
 [[package]]
 name = "kiwi-mcp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "blake3",
@@ -3107,7 +3107,7 @@ dependencies = [
 
 [[package]]
 name = "kiwi-policy"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "blake3",
  "cedar-policy",
@@ -3127,7 +3127,7 @@ dependencies = [
 
 [[package]]
 name = "kiwi-rerank"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "fastembed",
  "kiwi-core",
@@ -3139,7 +3139,7 @@ dependencies = [
 
 [[package]]
 name = "kiwi-vec"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "blake3",
  "fastembed",
@@ -3154,7 +3154,7 @@ dependencies = [
 
 [[package]]
 name = "kiwi-wasm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "kiwi-core",
  "wasmtime",
