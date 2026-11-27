@@ -149,6 +149,10 @@ async fn search_is_budgeted_governed_and_byte_stable() {
     }
     let (text, error) = call(&carl, "kiwi_search", json!({"queries": ["x"], "bogus": 1})).await;
     assert!(error, "unknown fields are refused: {text}");
+    // A field named for another one is refused with the call the tool takes.
+    let (text, error) = call(&carl, "kiwi_read", json!({"id": "vision"})).await;
+    assert!(error, "{text}");
+    assert!(text.contains(r#"{"ids":["vision"]}"#), "{text}");
     carl.cancel().await.unwrap();
 }
 
