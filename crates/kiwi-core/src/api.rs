@@ -88,6 +88,17 @@ pub struct SearchRequest {
     /// Results for each query before the budget cut (the default and the maximum are
     /// in the tool's description).
     pub limit: Option<u32>,
+    /// Instead of `queries`: an exact string, found on one line of a section's text.
+    /// The answer is every section line that contains it, in corpus order, not a
+    /// ranking; `budget` sizes a page and `next` reads on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub literal: Option<String>,
+    /// With `literal`: match regardless of case.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub ignore_case: bool,
+    /// With `literal`: the last match of the previous page (`id:line`); copy `next`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
 }
 
 /// What to add around each atom in `kiwi_read`.
@@ -295,6 +306,37 @@ pub struct SearchResponse {
     /// Hidden exact matches (only with `hidden = "stub"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub redacted: Option<u32>,
+}
+
+/// One line of a section's text that contains a `literal`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LiteralMatch {
+    /// The section (an atom id, as `kiwi_read` takes it).
+    pub id: String,
+    /// The line in the section's own text, from 1 (its heading), as `kiwi_read` gives it.
+    pub line: u32,
+    /// The line, cut around the match when long.
+    pub text: String,
+}
+
+/// `kiwi_search` output for a `literal`: every match, page by page.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LiteralResponse {
+    /// Commit the answer is pinned to (on a federated server, an id of the corpora's
+    /// snapshots together).
+    pub snapshot: String,
+    /// On a federated server: the snapshot of each corpus the caller can read, by
+    /// namespace.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub snapshots: BTreeMap<String, String>,
+    /// The matching lines, in corpus order.
+    pub matches: Vec<LiteralMatch>,
+    /// Token use of this page.
+    pub budget: BudgetUse,
+    /// When the page is full: the request for the next page. Absent once every match
+    /// has been given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next: Option<SearchRequest>,
 }
 
 /// A typed link from or to an atom.

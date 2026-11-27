@@ -25,8 +25,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use kiwi_core::api::{
-    AuditFacts, BudgetUse, ContextItem, HiddenItem, Link, MapNode, MapRequest, MapResponse, ReadRequest,
-    ReadResponse, SearchRequest, SearchResponse, TraceRequest, TraceResponse, Warning,
+    AuditFacts, BudgetUse, ContextItem, HiddenItem, Link, LiteralResponse, MapNode, MapRequest, MapResponse,
+    ReadRequest, ReadResponse, SearchRequest, SearchResponse, TraceRequest, TraceResponse, Warning,
 };
 use kiwi_core::api::{Level, ReadItem};
 use kiwi_core::{
@@ -268,7 +268,11 @@ fn requests_of(tool: &str, args: &serde_json::Value) -> Vec<String> {
         }
     };
     let asked: Vec<String> = match tool {
-        "kiwi_search" => strings(&args["queries"]),
+        "kiwi_search" => {
+            let mut asked = strings(&args["queries"]);
+            asked.extend(strings(&args["literal"]));
+            asked
+        }
         "kiwi_read" => strings(&args["ids"]),
         "kiwi_map" => strings(&args["scope"]),
         "kiwi_trace" => strings(&args["id"]),
@@ -766,6 +770,10 @@ impl KiwiService {
 
     /// `kiwi_search`, and a gap recorded when nothing matched.
     fn search_tool(&self, identity: &Identity, args: &serde_json::Value, req: &SearchRequest) -> Outcome {
+        if req.literal.is_some() {
+            // Every match is listed: none is no gap, it is the answer.
+            return Outcome::read(self.cached(identity, "kiwi_search", args, |s| self.literal(s, req)));
+        }
         let answered = self.cached(identity, "kiwi_search", args, |s| self.search(s, req));
         let gap = match &answered {
             Ok((answer, _, _)) => {
@@ -910,6 +918,77 @@ impl KiwiService {
             redacted,
         };
         Answer::new(&response, facts, Some(budget), response.results.len())
+    }
+
+    /// `kiwi_search` with a `literal`: every visible matching line, corpus by corpus in
+    /// the server's order, one page of the lead corpus's read budget at a time.
+    fn literal(&self, scoped: &[Scoped], req: &SearchRequest) -> Result<Answer, ToolError> {
+        if !self.federated() {
+            let (response, facts) = scoped[0].engine.literal_search(&scoped[0].view, req)?;
+            return Answer::new(
+                &response,
+                vec![facts],
+                Some(response.budget.limit),
+                response.matches.len(),
+            );
+        }
+        kiwi_core::check_literal(req)?;
+        let settings =
+            lead(scoped).map_or_else(EngineConfig::default, |index| *scoped[index].engine.config());
+        // The cursor names a section as the caller was given it, `namespace:id`; a
+        // hidden corpus's namespace is refused like one that does not exist.
+        let resume = match req.after.as_deref() {
+            None => None,
+            Some(after) => {
+                let (id, line) = kiwi_core::literal_cursor(after)?;
+                let (namespace, local) = id.split_once(':').ok_or_else(kiwi_core::stale_cursor)?;
+                let index = self
+                    .namespace_index(scoped, namespace)
+                    .ok_or_else(kiwi_core::stale_cursor)?;
+                Some((
+                    index,
+                    scoped[index]
+                        .engine
+                        .literal_resume(&scoped[index].view, local, line)?,
+                ))
+            }
+        };
+        let mut page = kiwi_core::LiteralPage::new(settings.read_budget(req.budget));
+        let mut facts = vec![AuditFacts::default(); scoped.len()];
+        for (index, scope) in scoped.iter().enumerate() {
+            // A corpus the caller can see nothing of is not read at all.
+            if page.full || !scope.visible() {
+                continue;
+            }
+            let after = match resume {
+                Some((at, _)) if index < at => continue,
+                Some((at, cursor)) if index == at => Some(cursor),
+                _ => None,
+            };
+            let extra = namespace_tokens(self.corpora[index].namespace());
+            facts[index] = scope
+                .engine
+                .literal(&scope.view, req, after, extra, &mut page, |id| {
+                    self.qualify(index, id)
+                })?;
+        }
+        let (snapshot, snapshots) = self.snapshots(scoped);
+        let response = LiteralResponse {
+            snapshot,
+            snapshots,
+            next: page.next(req),
+            budget: BudgetUse {
+                limit: page.limit,
+                used: page.used,
+            },
+            matches: page.matches,
+        };
+        Answer::new(
+            &response,
+            facts,
+            Some(response.budget.limit),
+            response.matches.len(),
+        )
     }
 
     fn qualify_warning(&self, index: usize, warning: Warning) -> Warning {

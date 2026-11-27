@@ -127,6 +127,127 @@ impl Default for EngineConfig {
     }
 }
 
+/// Checks a `literal` search and returns its literal: an exact string on one line,
+/// instead of `queries` and without `limit` (every match is given, page by page).
+pub fn check_literal(req: &SearchRequest) -> Result<&str> {
+    let invalid = |message: &str| Err(KiwiError::InvalidInput(message.to_owned()));
+    let Some(literal) = req.literal.as_deref() else {
+        return invalid("a literal search needs `literal`");
+    };
+    if !req.queries.is_empty() {
+        return invalid("`literal` replaces `queries`: send one of them");
+    }
+    if req.limit.is_some() {
+        return invalid(
+            "a `literal` search gives every match, page by page: size a page with `budget`, not `limit`",
+        );
+    }
+    if literal.trim().is_empty() {
+        return invalid("`literal` is empty");
+    }
+    if literal.contains(['\n', '\r']) {
+        return invalid("`literal` is found within one line: send it without line breaks");
+    }
+    if literal.chars().count() > MAX_QUERY_CHARS {
+        return Err(KiwiError::InvalidInput(format!(
+            "`literal` is limited to {MAX_QUERY_CHARS} characters"
+        )));
+    }
+    Ok(literal)
+}
+
+/// The section id and line of a `literal` search's cursor (`id:line`).
+pub fn literal_cursor(after: &str) -> Result<(&str, u32)> {
+    after
+        .rsplit_once(':')
+        .and_then(|(id, line)| Some((id, line.parse().ok()?)))
+        .filter(|(id, _)| !id.is_empty())
+        .ok_or_else(stale_cursor)
+}
+
+/// The refusal of a cursor that names no match the caller could have been given: the
+/// same whether its section does not exist or is hidden.
+pub fn stale_cursor() -> KiwiError {
+    KiwiError::InvalidInput(
+        "`after` names no section of this search: copy it from `next`, or search again without it".into(),
+    )
+}
+
+/// A page of `literal` matches being filled, across the corpora of a server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiteralPage {
+    /// Its token budget.
+    pub limit: u32,
+    /// Tokens its matches take.
+    pub used: u32,
+    /// The matches so far.
+    pub matches: Vec<LiteralMatch>,
+    /// Whether a match did not fit: there is a next page.
+    pub full: bool,
+}
+
+impl LiteralPage {
+    /// An empty page of `limit` tokens.
+    pub fn new(limit: u32) -> Self {
+        Self {
+            limit,
+            used: 0,
+            matches: Vec::new(),
+            full: false,
+        }
+    }
+
+    /// The request for the page after this one, when it is full.
+    pub fn next(&self, req: &SearchRequest) -> Option<SearchRequest> {
+        let last = self.matches.last().filter(|_| self.full)?;
+        Some(SearchRequest {
+            after: Some(format!("{}:{}", last.id, last.line)),
+            ..req.clone()
+        })
+    }
+}
+
+/// Where `needle` starts in `line`, in characters; `lower` is the needle in lower case
+/// when the match ignores case.
+fn literal_at(line: &str, needle: &str, lower: Option<&str>) -> Option<usize> {
+    let Some(lower) = lower else {
+        return line.find(needle).map(|at| line[..at].chars().count());
+    };
+    // Lower case can change a character's length: keep, for each byte of the lowered
+    // line, the character of `line` it came from.
+    let mut lowered = String::with_capacity(line.len());
+    let mut origin = Vec::with_capacity(line.len());
+    for (index, c) in line.chars().enumerate() {
+        for l in c.to_lowercase() {
+            let start = lowered.len();
+            lowered.push(l);
+            origin.resize(origin.len() + lowered.len() - start, index);
+        }
+    }
+    lowered.find(lower).map(|at| origin[at])
+}
+
+/// `line` whole, or cut around the character `at` with an ellipsis where it was cut.
+fn literal_excerpt(line: &str, at: usize) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    if chars.len() <= LITERAL_LINE_CHARS {
+        return line.to_owned();
+    }
+    let start = at
+        .saturating_sub(LITERAL_LEAD_CHARS)
+        .min(chars.len() - LITERAL_LINE_CHARS);
+    let end = start + LITERAL_LINE_CHARS;
+    let mut text = String::new();
+    if start > 0 {
+        text.push('…');
+    }
+    text.extend(&chars[start..end]);
+    if end < chars.len() {
+        text.push('…');
+    }
+    text
+}
+
 /// The atoms one caller may see: the OR of the bitmaps of its permitted classes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct View {
@@ -175,6 +296,10 @@ const TERM_WEIGHT: f64 = 0.75;
 const GRAPH_WEIGHT: f64 = 0.5;
 const RETRIEVER_WEIGHT: f64 = 1.0;
 const ITEM_OVERHEAD: u32 = 12;
+/// The most characters of a match's line a `literal` search gives back.
+const LITERAL_LINE_CHARS: usize = 240;
+/// Characters of a long line kept before its match.
+const LITERAL_LEAD_CHARS: usize = 80;
 const SUMMARY_OVERHEAD: u32 = 4;
 const NODE_OVERHEAD: u32 = 6;
 /// Characters of an atom a reranker reads.
@@ -565,10 +690,109 @@ impl Engine {
         Ok(set)
     }
 
+    /// The section and line a `literal` search's cursor names, when the caller can see
+    /// that section; otherwise the same refusal as for a section that does not exist.
+    pub fn literal_resume(&self, view: &View, id: &str, line: u32) -> Result<(u32, u32)> {
+        match self.pack.resolve_id(id)? {
+            Some(uid) if view.contains(uid) => Ok((uid, line)),
+            _ => Err(stale_cursor()),
+        }
+    }
+
+    /// Adds to `page` the lines that contain `req`'s literal, of the sections inside the
+    /// view and `req`'s filters, in pack order (documents, then their sections in source
+    /// order), from after `after` (a section and a line of it). Ids are given as
+    /// `qualify` makes them, `extra_id` the tokens that adds. Stops when the page is full.
+    /// The facts name the sections it gave lines of; hidden sections are never read.
+    pub fn literal(
+        &self,
+        view: &View,
+        req: &SearchRequest,
+        after: Option<(u32, u32)>,
+        extra_id: u32,
+        page: &mut LiteralPage,
+        qualify: impl Fn(&str) -> String,
+    ) -> Result<AuditFacts> {
+        let needle = check_literal(req)?;
+        let lower = req.ignore_case.then(|| needle.to_lowercase());
+        let mut facts = AuditFacts::default();
+        let candidates = self.candidates(view, &req.filters)?;
+        let from = after.map_or(0, |(uid, _)| uid);
+        for uid in candidates.range(from..) {
+            let body = self.pack.body(uid)?;
+            let skip = after.filter(|&(at, _)| at == uid).map_or(0, |(_, line)| line);
+            let mut given = false;
+            for (index, line) in body.lines().enumerate().skip(skip as usize) {
+                let Some(at) = literal_at(line, needle, lower.as_deref()) else {
+                    continue;
+                };
+                let atom = self.atom(uid)?;
+                let text = literal_excerpt(line, at);
+                let cost = atom.tokens.id.to_native()
+                    + extra_id
+                    + ITEM_OVERHEAD
+                    + u32::try_from(text.chars().count().div_ceil(4)).unwrap_or(u32::MAX);
+                if !page.matches.is_empty() && page.used + cost > page.limit {
+                    page.full = true;
+                    return Ok(facts);
+                }
+                page.used += cost;
+                page.matches.push(LiteralMatch {
+                    id: qualify(atom.id.as_str()),
+                    line: u32::try_from(index + 1).unwrap_or(u32::MAX),
+                    text,
+                });
+                if !given {
+                    facts.atoms.push(uid);
+                    given = true;
+                }
+            }
+        }
+        Ok(facts)
+    }
+
+    /// `kiwi_search` with a `literal`, on this corpus alone.
+    pub fn literal_search(&self, view: &View, req: &SearchRequest) -> Result<(LiteralResponse, AuditFacts)> {
+        check_literal(req)?;
+        let after = match req.after.as_deref() {
+            Some(after) => {
+                let (id, line) = literal_cursor(after)?;
+                Some(self.literal_resume(view, id, line)?)
+            }
+            None => None,
+        };
+        let mut page = LiteralPage::new(self.config.read_budget(req.budget));
+        let facts = self.literal(view, req, after, 0, &mut page, str::to_owned)?;
+        Ok((
+            LiteralResponse {
+                snapshot: self.pack.snapshot().to_owned(),
+                snapshots: BTreeMap::new(),
+                next: page.next(req),
+                budget: BudgetUse {
+                    limit: page.limit,
+                    used: page.used,
+                },
+                matches: page.matches,
+            },
+            facts,
+        ))
+    }
+
     /// The ranking behind `kiwi_search`: the cascade exact → structural → plugins, fused
     /// with RRF, with status priors and deprecation redirects applied. Every ranked atom,
     /// best first; nothing is cut yet.
     pub fn rank(&self, view: &View, req: &SearchRequest) -> Result<Ranking> {
+        if req.literal.is_some() {
+            check_literal(req)?;
+            return Err(KiwiError::InvalidInput(
+                "a `literal` search lists matches, it ranks nothing".into(),
+            ));
+        }
+        if req.ignore_case || req.after.is_some() {
+            return Err(KiwiError::InvalidInput(
+                "`ignore_case` and `after` go with `literal`".into(),
+            ));
+        }
         if req.queries.len() > MAX_QUERIES {
             return Err(KiwiError::InvalidInput(format!(
                 "at most {MAX_QUERIES} queries per search"
@@ -1781,5 +2005,30 @@ mod tests {
         assert_eq!(config.read_budget(None), DEFAULT_READ_BUDGET);
         assert_eq!(config.read_budget(Some(1)), MIN_BUDGET);
         assert_eq!(config.map_budget(Some(u32::MAX)), MAX_BUDGET);
+    }
+
+    #[test]
+    fn a_literal_is_found_where_it_starts_in_any_case() {
+        assert_eq!(literal_at("Đặt lịch với Người địa phương", "người", None), None);
+        assert_eq!(
+            literal_at("Đặt lịch với Người địa phương", "người", Some("người")),
+            Some(13)
+        );
+        assert_eq!(literal_at("đặt LỊCH", "Lịch", Some("lịch")), Some(4));
+        // A character whose lower case is longer keeps the positions after it right.
+        assert_eq!(literal_at("İstanbul KIWI", "kiwi", Some("kiwi")), Some(9));
+        assert_eq!(literal_at("kiwi_read takes ids", "ids", None), Some(16));
+    }
+
+    #[test]
+    fn a_long_line_is_cut_around_its_match() {
+        let line = format!("{}needle{}", "a".repeat(300), "b".repeat(300));
+        let text = literal_excerpt(&line, 300);
+        assert!(text.starts_with('…') && text.ends_with('…'), "{text}");
+        assert!(text.contains("needle"));
+        assert_eq!(text.chars().count(), LITERAL_LINE_CHARS + 2);
+        assert_eq!(literal_excerpt("short line", 0), "short line");
+        let end = format!("{}needle", "a".repeat(400));
+        assert!(literal_excerpt(&end, 400).ends_with("needle"));
     }
 }
