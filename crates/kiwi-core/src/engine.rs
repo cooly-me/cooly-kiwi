@@ -813,6 +813,7 @@ impl Engine {
             atoms: Vec::with_capacity(fit.included),
             blocked: ranking.blocked,
             degraded: !degraded.is_empty(),
+            files: Vec::new(),
         };
         for (item, &summary) in top.iter().zip(&fit.summaries) {
             results.push(self.item(item, summary, &mut warnings)?);
@@ -1251,6 +1252,7 @@ impl Engine {
                 snapshot: self.pack.snapshot().to_owned(),
                 snapshots: BTreeMap::new(),
                 atoms,
+                files: Vec::new(),
                 not_found,
                 hidden,
                 warnings: warnings.into_iter().collect(),

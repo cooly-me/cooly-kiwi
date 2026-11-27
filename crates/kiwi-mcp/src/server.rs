@@ -107,7 +107,7 @@ pub fn tools(defaults: &EngineConfig) -> Vec<Tool> {
         tool::<ReadRequest>(
             "kiwi_read",
             format!(
-                "Full text of up to {MAX_READ_IDS} atoms by id (`path#anchor`, a document path, or a document id such as ADR-005): a document comes whole with all its sections, a section with its subsections, within `budget` tokens of text (default {}, at most {MAX_BUDGET}). When the budget cuts the answer it has `more`: what was left out, and `next`, the exact arguments of the kiwi_read that reads on (or raise `budget`). Without `more` the answer is whole. `level` L0/L1 gives titles or abstracts instead; typed links and optional parent/siblings/children come with each atom. Cite an atom by its `cite`.",
+                "Full text of up to {MAX_READ_IDS} atoms by id (`path#anchor`, a document path, or a document id such as ADR-005): a document comes whole with all its sections, a section with its subsections, within `budget` tokens of text (default {}, at most {MAX_BUDGET}). When the budget cuts the answer it has `more`: what was left out, and `next`, the exact arguments of the kiwi_read that reads on (or raise `budget`). Without `more` the answer is whole. `level` L0/L1 gives titles or abstracts instead; typed links and optional parent/siblings/children come with each atom. Cite an atom by its `cite`. The corpus's access files (`KIWIOWNERS`, `.kiwi/policy.cedar`, `.kiwi/policy.tests.yaml`, `.kiwi/principals.yaml`) are read by their path too, verbatim in `files`, when the caller may read their path.",
                 defaults.read_budget
             ),
             true,

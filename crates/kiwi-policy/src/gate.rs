@@ -6,7 +6,7 @@
 //! what Cedar allows the *user*, the labels the *agent's* grant covers, and the labels
 //! the *session* was granted. An agent never sees more than the person it acts for.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
 use std::sync::Mutex;
 
@@ -16,6 +16,7 @@ use kiwi_core::plugin::Capabilities;
 use kiwi_core::{Pack, View};
 use serde_json::json;
 
+use crate::access::KiwiOwners;
 use crate::directory::{Directory, Identity};
 
 /// Errors of the policy gate.
@@ -56,6 +57,10 @@ pub struct PolicyGate {
     directory: Directory,
     authorizer: Authorizer,
     cache: Mutex<HashMap<(String, Identity), Vec<u32>>>,
+    /// The access files of the snapshot this gate was read from (`KIWIOWNERS` and the
+    /// policy, its tests and the principals) by corpus path: each verbatim, with the
+    /// access `KIWIOWNERS` declares for its path.
+    files: BTreeMap<String, (String, AccessDecl)>,
 }
 
 impl std::fmt::Debug for PolicyGate {
@@ -80,7 +85,42 @@ impl PolicyGate {
             directory,
             authorizer: Authorizer::new(),
             cache: Mutex::new(HashMap::new()),
+            files: BTreeMap::new(),
         })
+    }
+
+    /// This gate with the access files it was compiled from (text by corpus path), so
+    /// they are served from the same snapshot as the policy they hold, each guarded by
+    /// the access `owners` declares for its path, like any file of the corpus (none
+    /// declared: unlabeled, which no policy reads by default).
+    #[must_use]
+    pub fn with_files(mut self, files: BTreeMap<String, String>, owners: &KiwiOwners) -> Self {
+        self.files = files
+            .into_iter()
+            .map(|(path, text)| {
+                let access = owners.defaults(&path).access;
+                (path, (text, access))
+            })
+            .collect();
+        self
+    }
+
+    /// The paths of the access files `identity` may read: those whose declared access
+    /// it may read, through the same policy, agent grant and session scope as content.
+    pub fn readable_files(&self, identity: &Identity) -> Result<Vec<String>, PolicyError> {
+        let mut readable = Vec::new();
+        for (path, (_, access)) in &self.files {
+            if self.allows_chain(identity, std::slice::from_ref(access))? {
+                readable.push(path.clone());
+            }
+        }
+        Ok(readable)
+    }
+
+    /// The text of the access file at `path`, if the snapshot has one (whoever asks:
+    /// check [`Self::readable_files`] first).
+    pub fn file(&self, path: &str) -> Option<&str> {
+        self.files.get(path).map(|(text, _)| text.as_str())
     }
 
     /// The directory.

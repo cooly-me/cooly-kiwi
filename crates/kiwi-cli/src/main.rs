@@ -6,6 +6,7 @@ mod follow;
 mod identity;
 mod plugins;
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -392,6 +393,7 @@ fn load_governance(corpus: &Path, mode: &SourceMode) -> Result<Governance> {
             &config.governance.policy,
             &config.governance.principals,
             &config.governance.policy_tests,
+            OWNERS_PATH,
         ],
     )?;
     let gate = gate_from(&snapshot, &config)?;
@@ -433,8 +435,24 @@ fn gate_from(snapshot: &kiwi_compiler::source::Snapshot, config: &KiwiConfig) ->
             .with_context(|| format!("parsing {}", config.governance.principals))?,
         None => Directory::default(),
     };
-    Ok(PolicyGate::new(policy, directory)?)
+    let mut files = BTreeMap::new();
+    for path in [
+        OWNERS_PATH,
+        &config.governance.policy,
+        &config.governance.policy_tests,
+        &config.governance.principals,
+    ] {
+        if let Some(bytes) = snapshot.file(path) {
+            let text = std::str::from_utf8(bytes).with_context(|| format!("{path} is not UTF-8"))?;
+            files.insert(path.to_owned(), text.to_owned());
+        }
+    }
+    let owners = kiwi_compiler::build::load_owners(snapshot)?;
+    Ok(PolicyGate::new(policy, directory)?.with_files(files, &owners))
 }
+
+/// The corpus's ownership and access rules, at its root.
+const OWNERS_PATH: &str = "KIWIOWNERS";
 
 /// A finished build, with the governance read from the snapshot it was built from.
 struct Built {

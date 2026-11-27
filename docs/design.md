@@ -295,6 +295,22 @@ Hidden atoms are `invisible` by default: a hidden id is reported like an absent 
 With `hidden = "stub"`, responses carry a `redacted` count and stubs that name the
 owner to ask.
 
+**The access files are read like content.** `KIWIOWNERS`, the policy, its tests and
+the principals are not compiled into atoms, yet an agent that explains or quotes how a
+corpus is governed needs them verbatim, and a copy of the files outside Kiwi would be
+read under no policy and cited at no snapshot. So `kiwi_read` takes their paths as ids
+(`KIWIOWNERS`, `.kiwi/policy.cedar`, `.kiwi/policy.tests.yaml`, `.kiwi/principals.yaml`
+as `kiwi.toml` names them; `ns:path` on a federated server) and answers each whole in
+`files`, at the snapshot the policy was compiled from. Each is guarded as a file of the
+corpus: `KIWIOWNERS` declares its access by its path (a corpus whose `*` is internal
+shows them to staff; a line such as `.kiwi/principals.yaml label=confidential
+groups=security` narrows one), and the caller reads it only when the policy, the agent's
+grant and the token's labels allow that declaration, as for a section; with no rule it
+is unlabeled, which no policy reads unless it says so. A caller who may not read one gets
+it in `not_found`, as for a path that does not exist, and a read is audited with the
+file's path in `docs`. They are never searched or mapped: they are configuration, not
+knowledge, and whoever needs their text asks for it by path.
+
 **Leak tests are the contract.** `crates/kiwi-cli/tests/leak.rs` adds adversarial
 documents to the example corpus (access on a root heading, frontmatter behind a byte
 order mark or with trailing whitespace, CRLF, setext and indented headings, a bare
@@ -707,7 +723,7 @@ agent's context, and fewer tools are chosen correctly more often.
 | --- | --- | --- |
 | `kiwi_map` | `scope`, `depth`, `budget` | The L0/L1 tree of a scope, to orient |
 | `kiwi_search` | `queries[]`, `filters`, `budget`, `limit` | Ranked atoms at L1 or L0, why they matched, their status; every query answered |
-| `kiwi_read` | `ids[]`, `level`, `context`, `budget`, `after` | Whole documents or sections at L2 (or L0/L1), typed links, optional parent, siblings and children; `more` when the budget cut it |
+| `kiwi_read` | `ids[]`, `level`, `context`, `budget`, `after` | Whole documents or sections at L2 (or L0/L1), typed links, optional parent, siblings and children; `more` when the budget cut it. The access files by path, verbatim in `files`, for a caller who may read their path |
 | `kiwi_trace` | `id`, `relation`, `direction`, `depth` | A walk of the typed graph |
 | `kiwi_propose` | `changes[]`, `rationale`, `title` | The branch and pull request, whether review is needed, lint findings |
 | `kiwi_feedback` | `query`, `ids`, `verdict` | Records the verdict; `missing` feeds the knowledge-gap queue |

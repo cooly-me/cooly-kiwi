@@ -25,8 +25,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use kiwi_core::api::{
-    AuditFacts, BudgetUse, ContextItem, HiddenItem, Link, MapNode, MapRequest, MapResponse, ReadRequest,
-    ReadResponse, SearchRequest, SearchResponse, TraceRequest, TraceResponse, Warning,
+    AuditFacts, BudgetUse, ContextItem, FileItem, HiddenItem, Link, MapNode, MapRequest, MapResponse,
+    ReadRequest, ReadResponse, SearchRequest, SearchResponse, TraceRequest, TraceResponse, Warning,
 };
 use kiwi_core::api::{Level, ReadItem};
 use kiwi_core::{
@@ -151,7 +151,7 @@ struct ProposeResponse<'a> {
     lint: &'a [kiwi_core::plugin::Finding],
 }
 
-type CacheKey = (Vec<(String, Vec<u32>)>, &'static str, String);
+type CacheKey = (Vec<(String, Vec<u32>, Vec<String>)>, &'static str, String);
 /// An answer and the tokens of its text.
 type CachedAnswer = (Answer, u32);
 
@@ -317,6 +317,8 @@ struct Scoped {
     engine: Arc<Engine>,
     view: View,
     classes: Vec<u32>,
+    /// The access files the caller may read, by corpus path.
+    files: Vec<String>,
 }
 
 impl Scoped {
@@ -459,11 +461,13 @@ impl KiwiService {
             .map(|corpus| {
                 let served = corpus.served();
                 let (view, classes) = served.view(identity)?;
+                let files = served.gate.readable_files(identity)?;
                 Ok(Scoped {
                     engine: Arc::clone(&served.engine),
                     served,
                     view,
                     classes,
+                    files,
                 })
             })
             .collect()
@@ -673,7 +677,7 @@ impl KiwiService {
         let key: CacheKey = (
             scoped
                 .iter()
-                .map(|s| (s.served.key(), s.classes.clone()))
+                .map(|s| (s.served.key(), s.classes.clone(), s.files.clone()))
                 .collect(),
             tool,
             args.to_string(),
@@ -1034,16 +1038,116 @@ impl KiwiService {
     }
 
     fn read(&self, scoped: &[Scoped], req: &ReadRequest) -> Result<Answer, ToolError> {
+        check_read_ids(req)?;
+        let mut files = Vec::new();
+        let mut read = Vec::new();
+        let mut paths = vec![Vec::new(); scoped.len()];
+        for (position, asked) in req.ids.iter().enumerate() {
+            let Some((index, path, text)) = self.access_file(scoped, asked)? else {
+                read.push(asked.clone());
+                continue;
+            };
+            if position == 0 && req.after.is_some() {
+                return Err(ToolError::Invalid(
+                    "`after` reads on in the first id's sections, and an access file is read whole: put it after the id `after` continues".into(),
+                ));
+            }
+            files.push(FileItem {
+                id: self.qualify(index, path),
+                text: text.to_owned(),
+            });
+            paths[index].push(path.to_owned());
+        }
+        let (mut response, mut facts) = if read.is_empty() {
+            let (snapshot, snapshots) = self.snapshots(scoped);
+            let limit = lead(scoped)
+                .map_or_else(EngineConfig::default, |index| *scoped[index].engine.config())
+                .read_budget(req.budget);
+            let response = ReadResponse {
+                snapshot,
+                snapshots,
+                atoms: Vec::new(),
+                files: Vec::new(),
+                not_found: Vec::new(),
+                hidden: Vec::new(),
+                warnings: Vec::new(),
+                redacted: None,
+                budget: ReadBudget::new(limit).usage(),
+                more: None,
+            };
+            (response, vec![AuditFacts::default(); scoped.len()])
+        } else {
+            let sections = ReadRequest {
+                ids: read,
+                ..req.clone()
+            };
+            self.read_sections(scoped, &sections)?
+        };
+        for (facts, paths) in facts.iter_mut().zip(paths) {
+            facts.files = paths;
+        }
+        response.files = files;
+        let results = response.atoms.len() + response.files.len();
+        Answer::new(&response, facts, Some(response.budget.limit), results)
+    }
+
+    /// The access file `asked` names (`KIWIOWNERS`, the policy, its tests, the
+    /// principals; `ns:path` on a federated server), with its corpus and text, when the
+    /// caller may read it: it is guarded like any file of the corpus, by the access
+    /// `KIWIOWNERS` declares for its path. Anyone else gets `None`, and the id is then
+    /// looked up as a section and answered like any id that does not exist.
+    fn access_file<'a>(
+        &self,
+        scoped: &'a [Scoped],
+        asked: &'a str,
+    ) -> Result<Option<(usize, &'a str, &'a str)>, ToolError> {
+        let readable = |index: usize, path: &str| {
+            let scope = &scoped[index];
+            scope.visible() && scope.files.iter().any(|file| file == path)
+        };
+        let (index, path) = if !self.federated() {
+            (0, asked)
+        } else if let Some((namespace, path)) = asked.split_once(':')
+            && let Some(index) = self.namespace_index(scoped, namespace)
+        {
+            (index, path)
+        } else {
+            let found: Vec<usize> = (0..scoped.len()).filter(|&i| readable(i, asked)).collect();
+            match found.as_slice() {
+                [index] => (*index, asked),
+                [] => return Ok(None),
+                many => {
+                    return Err(ToolError::Invalid(format!(
+                        "`{asked}` exists in several namespaces ({}); qualify it as namespace:id",
+                        many.iter()
+                            .map(|&i| self.corpora[i].namespace())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )));
+                }
+            }
+        };
+        if !readable(index, path) {
+            return Ok(None);
+        }
+        Ok(scoped[index]
+            .served
+            .gate
+            .file(path)
+            .map(|text| (index, path, text)))
+    }
+
+    /// Reads sections: on one corpus through its engine, on a federated server across
+    /// the corpora, under one budget.
+    fn read_sections(
+        &self,
+        scoped: &[Scoped],
+        req: &ReadRequest,
+    ) -> Result<(ReadResponse, Vec<AuditFacts>), ToolError> {
         if !self.federated() {
             let (response, facts) = scoped[0].engine.read(&scoped[0].view, req)?;
-            return Answer::new(
-                &response,
-                vec![facts],
-                Some(response.budget.limit),
-                response.atoms.len(),
-            );
+            return Ok((response, vec![facts]));
         }
-        check_read_ids(req)?;
         let level = req.level.unwrap_or(Level::L2);
         let context = req.context.unwrap_or_default();
         // One budget over every corpus read, the lead corpus's.
@@ -1122,6 +1226,7 @@ impl KiwiService {
             snapshot,
             snapshots,
             atoms,
+            files: Vec::new(),
             not_found,
             hidden,
             warnings: warnings.into_iter().collect(),
@@ -1129,12 +1234,7 @@ impl KiwiService {
             budget: budget.usage(),
             more,
         };
-        Answer::new(
-            &response,
-            facts,
-            Some(response.budget.limit),
-            response.atoms.len(),
-        )
+        Ok((response, facts))
     }
 
     /// An atom read from corpus `index` (at `snapshot`), with every id in it qualified.

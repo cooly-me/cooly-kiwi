@@ -210,7 +210,7 @@ whichever of them it carries.
 | `blocked` | integer | always; matches withheld by the policy |
 | `status` | `ok`, `refused` or `failed` | *optional*; on every call record |
 | `ids` | array of strings | *optional*; when not empty: stable ids of the visible atoms returned (search results, map nodes, read atoms, trace nodes, a resource), named by a feedback, or changed by a proposal (edited sections, roots of documents written, set or deleted), distinct, in answer order; unqualified on a federated server |
-| `docs` | array of strings | *optional*; when not empty: the distinct document paths (without `.md`) of `ids` |
+| `docs` | array of strings | *optional*; when not empty: the distinct document paths (without `.md`) of `ids`, then the paths of the access files read |
 | `results` | integer | *optional*; on an `ok` map, search, read, trace or resource: items returned by the whole call |
 | `tokens` | integer | *optional*; on every call record: tokens of the body the caller received, answer or message, with the budget's tokenizer |
 | `budget` | integer | *optional*; on an `ok` map, search or read: the token budget applied |

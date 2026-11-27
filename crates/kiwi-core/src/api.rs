@@ -113,7 +113,9 @@ pub enum ReadContext {
 pub struct ReadRequest {
     /// Atom ids (`path#anchor`), document paths or document ids (`ADR-005`). At L2 each
     /// is read whole: a document with all its sections, a section with all its
-    /// subsections.
+    /// subsections. An access file's path (`KIWIOWNERS`, `.kiwi/policy.cedar`,
+    /// `.kiwi/policy.tests.yaml`, `.kiwi/principals.yaml`) reads it verbatim, for a
+    /// caller who may read every section of the corpus.
     pub ids: Vec<String>,
     /// Zoom level (default L2, the full text).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -382,6 +384,16 @@ pub struct HiddenItem {
     pub note: String,
 }
 
+/// An access file of the corpus (`KIWIOWNERS`, the policy, its tests, the principals),
+/// at the answer's snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileItem {
+    /// The file's path in the corpus (namespaced on a federated server).
+    pub id: String,
+    /// Its text, verbatim.
+    pub text: String,
+}
+
 /// `kiwi_read` output.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReadResponse {
@@ -394,6 +406,9 @@ pub struct ReadResponse {
     pub snapshots: BTreeMap<String, String>,
     /// The atoms, in request order.
     pub atoms: Vec<ReadItem>,
+    /// The access files asked for, verbatim and whole, in request order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<FileItem>,
     /// Ids that do not exist (or that the caller may not see).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub not_found: Vec<String>,
@@ -472,4 +487,6 @@ pub struct AuditFacts {
     pub blocked: u32,
     /// A retrieval tier failed; the answer is not cached.
     pub degraded: bool,
+    /// Access files returned, by corpus path.
+    pub files: Vec<String>,
 }

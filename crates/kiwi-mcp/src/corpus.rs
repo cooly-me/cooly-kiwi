@@ -643,7 +643,12 @@ impl Corpus {
         let Some(log) = &self.audit else {
             return Ok(());
         };
-        let (ids, docs) = stable_ids(pack, &facts.atoms);
+        let (ids, mut docs) = stable_ids(pack, &facts.atoms);
+        for file in &facts.files {
+            if !docs.contains(file) {
+                docs.push(file.clone());
+            }
+        }
         let queries = if self.served().config.audit.record_requests {
             call.requests.clone()
         } else {
