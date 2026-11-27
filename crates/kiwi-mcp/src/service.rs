@@ -255,6 +255,39 @@ const MAX_REQUEST_CHARS: usize = 2_000;
 /// sections and paths a proposal names. Taken from the arguments as sent, so a refused
 /// call has them too; anything else in the arguments (filters, contents, rationales) is
 /// never kept.
+/// Fields callers name for another one: the tool, the name given, the name it takes,
+/// whether it takes a list, and what the field holds.
+const MISNAMED: &[(&str, &str, &str, bool, &str)] = &[
+    ("kiwi_read", "id", "ids", true, "a list of ids"),
+    ("kiwi_search", "query", "queries", true, "a list of queries"),
+    ("kiwi_trace", "ids", "id", false, "one id"),
+];
+
+/// The error for a field named for another one, with the call written as the tool
+/// takes it: `{"ids": ["ADR-005"]}` for `{"id": "ADR-005"}`.
+fn misnamed(tool: &str, args: &serde_json::Value) -> Option<String> {
+    let fields = args.as_object()?;
+    MISNAMED.iter().find_map(|&(name, given, field, list, holds)| {
+        if name != tool || fields.contains_key(field) {
+            return None;
+        }
+        let value = fields.get(given)?;
+        let value = match (list, value) {
+            (true, serde_json::Value::Array(_)) => value.clone(),
+            (true, _) => serde_json::Value::Array(vec![value.clone()]),
+            (false, serde_json::Value::Array(items)) if items.len() == 1 => items[0].clone(),
+            (false, _) => value.clone(),
+        };
+        let mut fixed = fields.clone();
+        fixed.remove(given);
+        fixed.insert(field.to_owned(), value);
+        Some(format!(
+            "{tool} takes `{field}`, {holds}, not `{given}`: {}",
+            serde_json::Value::Object(fixed)
+        ))
+    })
+}
+
 fn requests_of(tool: &str, args: &serde_json::Value) -> Vec<String> {
     let strings = |value: &serde_json::Value| -> Vec<String> {
         match value {
@@ -613,6 +646,7 @@ impl KiwiService {
                 .collect();
         }
         let summary = CallSummary {
+            call: crate::server::unique_id(32),
             status,
             results: results.filter(|_| answered),
             tokens,
@@ -660,8 +694,12 @@ impl KiwiService {
             .map_or(true, |(view, _)| !view.visible().is_empty())
     }
 
-    fn parse<T: for<'de> Deserialize<'de>>(args: serde_json::Value) -> Result<T, ToolError> {
-        serde_json::from_value(args).map_err(|e| ToolError::Invalid(format!("invalid arguments: {e}")))
+    /// The arguments of `tool`; a field named for another one is answered with the
+    /// right name and the caller's value in the shape the tool takes.
+    fn parse<T: for<'de> Deserialize<'de>>(tool: &str, args: serde_json::Value) -> Result<T, ToolError> {
+        serde_json::from_value(args.clone()).map_err(|e| {
+            ToolError::Invalid(misnamed(tool, &args).unwrap_or_else(|| format!("invalid arguments: {e}")))
+        })
     }
 
     /// Answers a read tool from the cache or by running it. Returns the answer, the
@@ -740,27 +778,27 @@ impl KiwiService {
         };
         let requests = requests_of(tool, &args);
         let outcome = match tool {
-            "kiwi_map" => match Self::parse::<MapRequest>(args.clone()) {
+            "kiwi_map" => match Self::parse::<MapRequest>(tool, args.clone()) {
                 Ok(req) => Outcome::read(self.cached(identity, tool, &args, |s| self.map(s, &req))),
                 Err(error) => Outcome::stopped(error),
             },
-            "kiwi_search" => match Self::parse::<SearchRequest>(args.clone()) {
+            "kiwi_search" => match Self::parse::<SearchRequest>(tool, args.clone()) {
                 Ok(req) => self.search_tool(identity, &args, &req),
                 Err(error) => Outcome::stopped(error),
             },
-            "kiwi_read" => match Self::parse::<ReadRequest>(args.clone()) {
+            "kiwi_read" => match Self::parse::<ReadRequest>(tool, args.clone()) {
                 Ok(req) => Outcome::read(self.cached(identity, tool, &args, |s| self.read(s, &req))),
                 Err(error) => Outcome::stopped(error),
             },
-            "kiwi_trace" => match Self::parse::<TraceRequest>(args.clone()) {
+            "kiwi_trace" => match Self::parse::<TraceRequest>(tool, args.clone()) {
                 Ok(req) => Outcome::read(self.cached(identity, tool, &args, |s| self.trace(s, &req))),
                 Err(error) => Outcome::stopped(error),
             },
-            "kiwi_feedback" => match Self::parse(args) {
+            "kiwi_feedback" => match Self::parse(tool, args) {
                 Ok(req) => self.feedback_tool(identity, req),
                 Err(error) => Outcome::stopped(error),
             },
-            _ => match Self::parse(args) {
+            _ => match Self::parse(tool, args) {
                 Ok(req) => self.propose_tool(identity, req),
                 Err(error) => Outcome::stopped(error),
             },
@@ -1592,4 +1630,30 @@ const MAX_GAP_QUERY: usize = 2_000;
 /// Tokens a `namespace:` prefix adds to an id.
 fn namespace_tokens(namespace: &str) -> u32 {
     kiwi_compiler::compile::count_tokens(&format!("{namespace}:"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::misnamed;
+    use serde_json::json;
+
+    #[test]
+    fn a_misnamed_field_is_answered_with_the_call_the_tool_takes() {
+        assert_eq!(
+            misnamed("kiwi_read", &json!({ "id": "ADR-005", "budget": 4000 })).as_deref(),
+            Some(r#"kiwi_read takes `ids`, a list of ids, not `id`: {"budget":4000,"ids":["ADR-005"]}"#)
+        );
+        assert_eq!(
+            misnamed("kiwi_search", &json!({ "query": ["refunds"] })).as_deref(),
+            Some(r#"kiwi_search takes `queries`, a list of queries, not `query`: {"queries":["refunds"]}"#)
+        );
+        assert_eq!(
+            misnamed("kiwi_trace", &json!({ "ids": ["ADR-005"] })).as_deref(),
+            Some(r#"kiwi_trace takes `id`, one id, not `ids`: {"id":"ADR-005"}"#)
+        );
+        // Other faults keep serde's error: another tool, another field, or both names.
+        assert_eq!(misnamed("kiwi_map", &json!({ "id": "x" })), None);
+        assert_eq!(misnamed("kiwi_read", &json!({ "idz": "x" })), None);
+        assert_eq!(misnamed("kiwi_read", &json!({ "id": "x", "ids": ["x"] })), None);
+    }
 }

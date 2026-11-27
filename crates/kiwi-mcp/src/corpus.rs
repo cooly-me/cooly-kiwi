@@ -123,6 +123,8 @@ fn edit_of(change: &ProposeChange) -> Result<Edit, ToolError> {
 /// What a call did as a whole: the same on the record of every corpus it consulted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallSummary {
+    /// The call's id, on each of its records.
+    pub call: String,
     /// How it ended.
     pub status: AuditStatus,
     /// Items the answer returned, for the tools that return items.
@@ -656,6 +658,7 @@ impl Corpus {
             tool: tool.to_owned(),
             snapshot: pack.snapshot().to_owned(),
             namespace: self.namespace.clone(),
+            call: Some(call.call.clone()),
             atoms: facts.atoms.clone(),
             blocked: facts.blocked,
             status: Some(call.status),
