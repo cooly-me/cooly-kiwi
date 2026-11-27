@@ -1,12 +1,10 @@
 name: bench
 
 # The benchmark suite (bench/run.sh): quality, latency, build, reload and scale against
-# bench/baselines/, on every release, nightly and by hand; never on pull requests.
+# bench/baselines/, on every release and by hand; never on pull requests.
 on:
   release:
     types: [published]
-  schedule:
-    - cron: "17 3 * * *"
   workflow_dispatch:
 
 permissions:
